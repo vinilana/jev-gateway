@@ -1,7 +1,7 @@
 {
   "name": "jev-gateway",
   "version": "0.2.2",
-  "description": "Local LLM gateway that lets TypeSafe's Jev model pick the tool for coding agents. Launchers for Codex and Claude Code, with a monitoring dashboard.",
+  "description": "Local LLM gateway that lets TypeSafe's Jev model pick the tool for coding agents. Launchers for Codex, Claude Code, and OpenCode, with a monitoring dashboard.",
   "keywords": [
     "llm",
     "gateway",
@@ -11,6 +11,7 @@
     "tool-calling",
     "codex",
     "claude-code",
+    "opencode",
     "openai",
     "anthropic"
   ],
@@ -30,7 +31,8 @@
   },
   "bin": {
     "jev-codex": "bin/jev-codex.mjs",
-    "jev-claude": "bin/jev-claude.mjs"
+    "jev-claude": "bin/jev-claude.mjs",
+    "jev-opencode": "bin/jev-opencode.mjs"
   },
   "files": [
     "dist",
@@ -47,6 +49,7 @@
     "test": "vitest run",
     "codex": "node bin/jev-codex.mjs",
     "claude": "node bin/jev-claude.mjs",
+    "opencode": "node bin/jev-opencode.mjs",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {

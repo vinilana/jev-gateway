@@ -5,8 +5,8 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex** and **Claude Code** out of the box, including on ChatGPT and claude.ai
-subscriptions, and with any client that speaks the OpenAI or Anthropic APIs.
+It works with **Codex**, **Claude Code**, and stable **OpenCode** out of the box, including on
+ChatGPT and claude.ai subscriptions, and with any client that speaks the OpenAI or Anthropic APIs.
 
 > Independent project, not affiliated with or endorsed by TypeSafe. "Jev" is TypeSafe's model and
 > this gateway is a client of its public API.
@@ -14,7 +14,7 @@ subscriptions, and with any client that speaks the OpenAI or Anthropic APIs.
 ## Quick start
 
 You need Node.js 22.15 or newer, a [TypeSafe API key](https://docs.typesafe.ai/introduction), and
-Codex and/or Claude Code already installed and logged in.
+Codex, Claude Code, and/or OpenCode already installed and logged in.
 
 **1. Install**
 
@@ -34,6 +34,7 @@ echo "TYPESAFE_API_KEY=your-key-here" > ~/.jev-gateway/.env
 ```bash
 jev-codex      # use it exactly like `codex`
 jev-claude     # use it exactly like `claude`
+jev-opencode   # use it exactly like `opencode` (stable v1)
 ```
 
 **4. Watch it work**
@@ -42,15 +43,15 @@ jev-claude     # use it exactly like `claude`
 jev-codex --dashboard
 ```
 
-That's it. Your existing login keeps working, nothing in `~/.codex` or `~/.claude` is changed, and
-plain `codex` and `claude` still behave as before. Only sessions started with the `jev-` commands go
-through the gateway.
+That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`, or
+`~/.config/opencode` is changed, and plain `codex`, `claude`, and `opencode` still behave as
+before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## What to expect
 
-- The first `jev-codex` or `jev-claude` starts a small gateway in the background and then opens your
-  agent. Every argument is passed through, so `jev-codex exec "fix the failing test"` works like
-  `codex exec "fix the failing test"`.
+- The first `jev-codex`, `jev-claude`, or `jev-opencode` starts a small gateway in the background
+  and then opens your agent. Every argument is passed through, so `jev-codex exec "fix the
+  failing test"` works like `codex exec "fix the failing test"`.
 - The gateway keeps running after you close the agent, so the next session starts instantly. Stop it
   with `--stop`.
 - Each turn, the gateway asks Jev which tool fits. When Jev is confident, the gateway steers the LLM
@@ -61,7 +62,7 @@ through the gateway.
 
 ## Commands
 
-All of these work with both `jev-codex` and `jev-claude`.
+All of these work with `jev-codex`, `jev-claude`, and `jev-opencode`.
 
 | Command | What it does |
 | --- | --- |
@@ -76,17 +77,18 @@ All of these work with both `jev-codex` and `jev-claude`.
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790 and Claude Code uses port 8789. Change them with `JEV_CODEX_PORT` and
-`JEV_CLAUDE_PORT`.
+Codex uses port 8790, Claude Code uses port 8789, and OpenCode uses port 8791. Change them with
+`JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, and `JEV_OPENCODE_PORT`.
 
 ## Dashboard
 
 ```bash
-jev-codex --dashboard     # or: jev-claude --dashboard
+jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard
 ```
 
 This opens `http://localhost:8790/dashboard`. If no browser window appears, paste that address into
-your browser. One page shows both gateways (Codex and Claude) and refreshes every 2 seconds.
+your browser. One page shows each gateway (Codex, Claude, and OpenCode) and refreshes every
+2 seconds.
 
 You will see:
 
@@ -136,6 +138,139 @@ extended thinking, and the API rejects a forced tool while thinking is on. It al
 conversation on every turn, and changing `tool_choice` would invalidate that cache. So for Claude
 Code the gateway adds a short suggestion to the request instead (`hint` mode), which the model is
 free to ignore. Expect better tool picks on large tool lists, not lower cost or latency.
+
+## Using it with OpenCode
+
+Tested with stable OpenCode v1.18.31. OpenCode v2 is out of scope: no `previous_response_id`
+chaining, namespaces, or `additional_tools` behavior is assumed.
+
+**Quick path**
+
+```bash
+jev-opencode   # use it exactly like `opencode`
+```
+
+That starts the gateway on `http://127.0.0.1:8791` if needed, then runs `opencode` through it
+with a `jev-gateway` custom provider injected via `OPENCODE_CONFIG_CONTENT`. Your
+`~/.config/opencode` files are never written, and every `opencode` flag (including `-m`) forwards
+untouched. The launcher uses stable `@ai-sdk/openai-compatible`, so OpenCode speaks
+`POST /v1/chat/completions` off `http://127.0.0.1:8791/v1` by default — an endpoint the gateway
+already routes.
+
+Manage it like the other launchers:
+
+```bash
+jev-opencode --gateway-help   # list launcher commands (`--help` stays opencode's own help)
+jev-opencode --print-config   # opencode.json snippet to point plain `opencode` at the gateway
+jev-opencode --start          # start the gateway without opening opencode
+jev-opencode --stop           # stop the background gateway
+jev-opencode --status         # is the gateway running, and where does it forward to?
+jev-opencode --dashboard      # open the monitoring dashboard in your browser
+```
+
+### Credentials and upstream
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TYPESAFE_API_KEY` | required | Authorizes the Jev tool-selection call only. Never sent as the LLM upstream credential |
+| `OPENAI_API_KEY` | your key | Your LLM credential. OpenCode resolves `{env:OPENAI_API_KEY}` and the gateway forwards it untouched to the LLM upstream |
+| `JEV_OPENCODE_UPSTREAM_BASE_URL` | `https://api.openai.com/v1` | Where the gateway forwards OpenCode traffic: your LLM provider, not the TypeSafe endpoint |
+| `JEV_OPENCODE_MODEL` | `gpt-5` | Model selected as `jev-gateway/<model>` |
+| `JEV_OPENCODE_PORT` | `8791` | Router port for OpenCode |
+
+The gateway forwards the client's `Authorization` header to the LLM upstream. A launcher-spawned
+gateway strips `UPSTREAM_API_KEY`/`ROUTER_API_KEY` by design, so the client's own key always
+flows through and no gateway key swap applies on this path. (Standalone server mode can hold the
+provider key with `UPSTREAM_API_KEY`; see "Running it as a server" below.)
+
+### Manual setup
+
+Keep the gateway running, then point plain `opencode` at it with a file — no shell quoting needed:
+
+```bash
+jev-opencode --start
+jev-opencode --print-config   # copy the opencode.json snippet it prints
+```
+
+Chat Completions (the launcher default, stable `@ai-sdk/openai-compatible`):
+
+```json
+{
+  "model": "jev-gateway/gpt-5",
+  "small_model": "jev-gateway/gpt-5",
+  "provider": {
+    "jev-gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Jev Gateway",
+      "options": {
+        "baseURL": "http://127.0.0.1:8791/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "gpt-5": {
+          "name": "Jev Gateway (gpt-5)"
+        }
+      }
+    }
+  }
+}
+```
+
+Responses (stable `@ai-sdk/openai` instead):
+
+```json
+{
+  "model": "jev-gateway/gpt-5",
+  "small_model": "jev-gateway/gpt-5",
+  "provider": {
+    "jev-gateway": {
+      "npm": "@ai-sdk/openai",
+      "name": "Jev Gateway",
+      "options": {
+        "baseURL": "http://127.0.0.1:8791/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "gpt-5": {
+          "name": "Jev Gateway (gpt-5)"
+        }
+      }
+    }
+  }
+}
+```
+
+Save either block as `opencode.json` in the project root or `~/.config/opencode/opencode.json`,
+then select it with `opencode --model jev-gateway/gpt-5`.
+
+`baseURL` includes `/v1`; OpenCode and the AI SDK append the rest (`/chat/completions` for
+`@ai-sdk/openai-compatible`, `/responses` for `@ai-sdk/openai`). Both endpoints are routed by the
+gateway above.
+
+### Tools and routing
+
+Native OpenCode tools and MCP tools converge on the wire to `type: "function"` function tools. MCP
+naming was not captured live; the equivalence verified is the wire shape — an MCP tool arrives as
+the same function-tool definition a native tool does, so the gateway offers both to Jev the same
+way.
+
+Expected modes (reported in `x-jev-gateway-mode`):
+
+| Mode | When |
+| --- | --- |
+| `forced` | Jev picked a tool but some arguments are open-ended, so the LLM fills them in |
+| `none` | Jev is confident no tool is needed (`tool_choice: "none"`) |
+| `passthrough` | Low confidence, Jev failed, no tools, or the caller already decided — forwarded untouched |
+| `direct` | Jev picked a tool and every argument is an enum, boolean, or constant — answered with no LLM call |
+
+Most OpenCode tools take open text (`bash` takes a command, `read` takes a path), so `forced`
+is the usual outcome: Jev picks the tool and the LLM fills in the free-form arguments. `direct`
+needs a fully closed schema (only enums, booleans, or constants), which fits small MCP-style tools
+with fixed choices rather than everyday file and shell tools.
+
+The launcher sets `OPENCODE_EXPERIMENTAL_NATIVE_LLM=false` and
+`OPENCODE_EXPERIMENTAL_CODE_MODE=false` for the launched process only. Those experimental modes
+are outside the supported path; the stable AI SDK provider above is the supported one.
 
 ## Running it as a server for your own app
 
@@ -292,7 +427,7 @@ src/usage.ts          token usage read from a reply, normalised across providers
 src/app.ts            routes, auth, headers, and the resend-on-rejection fallback
 src/events.ts         recent request metadata kept in memory and restored from the log
 src/dashboard.ts      serves /dashboard (dashboard.html is the whole page, no build step)
-bin/                  jev-codex and jev-claude launchers (launcher.mjs, clients.mjs)
+bin/                  jev-codex, jev-claude, and jev-opencode launchers (launcher.mjs, clients.mjs)
 scripts/mock-jev.mjs  local stand-in for Jev
 ```
 
