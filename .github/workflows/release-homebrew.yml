@@ -1,0 +1,164 @@
+# Bump the Homebrew formula in vinilana/homebrew-tap on every published release.
+#
+# Ordering matters: tag/release -> npm publish -> formula bump. npm can lag
+# behind the GitHub release (seen with 0.2.2: release existed, npm latest was
+# still 0.2.1), so this workflow waits for the npm tarball before computing
+# the SHA256 and upserting Formula/jev-gateway.rb.
+#
+# Setup: create the tap repo (see docs/homebrew-tap.md), then add a
+# HOMEBREW_TAP_TOKEN secret (fine-grained PAT with contents:write on the tap
+# repo). Never hardcode credentials.
+
+name: release-homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to bump (e.g. v0.2.2). Defaults to the release event tag."
+        required: false
+        default: ""
+      tap_repo:
+        description: "Tap repository (owner/repo)."
+        required: false
+        default: "vinilana/homebrew-tap"
+      push_mode:
+        description: "How to deliver the bump: direct-push or pr."
+        required: false
+        default: "direct-push"
+
+permissions:
+  contents: read
+
+env:
+  TAP_REPO: ${{ inputs.tap_repo || 'vinilana/homebrew-tap' }}
+  PUSH_MODE: ${{ inputs.push_mode || 'direct-push' }}
+
+jobs:
+  bump-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version from tag
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag found. Publish a release or re-run with the 'tag' input (e.g. v0.2.2)."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not derive a version from tag '$TAG'."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG -> $VERSION"
+
+      - name: Wait for the npm tarball
+        id: tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TARBALL_URL="https://registry.npmjs.org/jev-gateway/jev-gateway-${VERSION}.tgz"
+          echo "tarball_url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
+          # npm can lag behind the GitHub release (0.2.2 shipped on GitHub
+          # while npm latest was still 0.2.1). Poll instead of failing fast.
+          ATTEMPTS=30
+          SLEEP_SECONDS=60
+          for i in $(seq 1 "$ATTEMPTS"); do
+            if curl -fsSL -o /dev/null "$TARBALL_URL"; then
+              echo "npm tarball available: $TARBALL_URL (attempt $i/$ATTEMPTS)"
+              exit 0
+            fi
+            echo "Attempt $i/$ATTEMPTS: $TARBALL_URL not on npm yet; waiting ${SLEEP_SECONDS}s..."
+            sleep "$SLEEP_SECONDS"
+          done
+          echo "::error::npm tarball still missing after $ATTEMPTS attempts: $TARBALL_URL. npm publish likely lagged behind the GitHub release (as with 0.2.2). Publish jev-gateway@$VERSION to npm, then re-run this workflow."
+          exit 1
+
+      - name: Download tarball and compute SHA256
+        id: sha
+        env:
+          TARBALL_URL: ${{ steps.tarball.outputs.tarball_url }}
+        run: |
+          curl -fsSL -o /tmp/jev-gateway.tgz "$TARBALL_URL"
+          SHA256=$(sha256sum /tmp/jev-gateway.tgz | cut -d' ' -f1)
+          if [ -z "$SHA256" ]; then
+            echo "::error::Failed to compute SHA256 for $TARBALL_URL."
+            exit 1
+          fi
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA256"
+
+      - name: Render Formula/jev-gateway.rb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL_URL: ${{ steps.tarball.outputs.tarball_url }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          cat > /tmp/jev-gateway.rb <<EOF
+          class JevGateway < Formula
+            desc "Local LLM gateway that routes tool selection through Jev"
+            homepage "https://github.com/vinilana/jev-gateway"
+            url "${TARBALL_URL}"
+            sha256 "${SHA256}"
+            license "MIT"
+
+            depends_on "node"
+
+            def install
+              libexec.install Dir["*"]
+              bin.install_symlink Dir[libexec/"bin/jev-*"]
+            end
+
+            test do
+              assert_match "jev-codex", shell_output("#{bin}/jev-codex --status")
+              assert_match "jev-claude", shell_output("#{bin}/jev-claude --status")
+            end
+          end
+          EOF
+          cat /tmp/jev-gateway.rb
+
+      - name: Upsert the formula in the tap repo
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::Missing HOMEBREW_TAP_TOKEN secret. Add a PAT with contents:write on $TAP_REPO (see docs/homebrew-tap.md)."
+            exit 1
+          fi
+          TAP_DIR="$(mktemp -d)"
+          if ! git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" "$TAP_DIR"; then
+            echo "::error::Could not clone tap repo $TAP_REPO. Create it first (see docs/homebrew-tap.md bootstrap), then re-run."
+            exit 1
+          fi
+          mkdir -p "$TAP_DIR/Formula"
+          cp /tmp/jev-gateway.rb "$TAP_DIR/Formula/jev-gateway.rb"
+          cd "$TAP_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # git diff alone misses untracked files, so a first-time formula would
+          # look "up to date" and never be created. Require tracked-and-clean.
+          if git ls-files --error-unmatch Formula/jev-gateway.rb >/dev/null 2>&1 && git diff --quiet -- Formula/jev-gateway.rb; then
+            echo "Formula already up to date for $VERSION; nothing to push."
+            exit 0
+          fi
+          if [ "$PUSH_MODE" = "pr" ]; then
+            BRANCH="bump/jev-gateway-${VERSION}"
+            git checkout -b "$BRANCH"
+            git add Formula/jev-gateway.rb
+            git commit -m "feat(brew): bump jev-gateway to ${VERSION}"
+            git push -u origin "$BRANCH"
+            gh pr create --repo "$TAP_REPO" --title "Bump jev-gateway to ${VERSION}" \
+              --body "Automated formula bump for jev-gateway ${VERSION} (release-homebrew workflow)."
+          else
+            git add Formula/jev-gateway.rb
+            git commit -m "feat(brew): bump jev-gateway to ${VERSION}"
+            git push origin HEAD
+          fi

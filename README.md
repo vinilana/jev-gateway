@@ -22,6 +22,17 @@ Codex and/or Claude Code already installed and logged in.
 npm install -g jev-gateway
 ```
 
+### Install with Homebrew (macOS and Linux)
+
+```bash
+brew tap vinilana/tap
+brew install jev-gateway
+# without tapping first: brew install vinilana/tap/jev-gateway
+```
+
+Update later with `brew upgrade jev-gateway`. Same launchers, same setup —
+continue with step 2 below. (Details: [docs/homebrew-tap.md](docs/homebrew-tap.md).)
+
 **2. Save your TypeSafe key**
 
 ```bash
