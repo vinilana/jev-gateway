@@ -11,6 +11,7 @@ import { dashboardRoutes } from "./dashboard.js";
 import { redactHeaders, summarizeResponse, type Dump } from "./debug.js";
 import { decide, type AskJev, type Decision } from "./decide.js";
 import { createEventLog, type EventLog } from "./events.js";
+import type { Profile } from "./profiles.js";
 import { forward } from "./upstream.js";
 import { readUsage } from "./usage.js";
 
@@ -20,6 +21,8 @@ export interface Deps {
   /** Upstream transport; defaults to global fetch. */
   fetch?: typeof fetch;
   log?: (entry: Record<string, unknown>) => void;
+  /** Tools served under their own path prefix, each with its own upstream (see profiles.ts). */
+  profiles?: Profile[];
   /** What the dashboard shows; defaults to an empty in-memory log. */
   events?: EventLog;
   /** Opt-in wire dumps (see debug.ts); off by default. */
@@ -66,7 +69,7 @@ function decisionHeaders(decision: Decision): Record<string, string> {
   return headers;
 }
 
-export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: writeLog = () => {}, events = createEventLog(), dump }: Deps) {
+export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: writeLog = () => {}, events = createEventLog(), dump, profiles = [] }: Deps) {
   const app = new Hono();
 
   /** One routed request: a line in the log, and a row on the dashboard. */
@@ -121,7 +124,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     return { decision: await decide(input, config, askJev), tools: input.tools.length };
   };
 
-  const route = <Req extends AnyRequest>(adapter: Adapter<Req>) => async (c: Context) => {
+  const route = <Req extends AnyRequest>(adapter: Adapter<Req>, profile?: Profile) => async (c: Context) => {
     const startedAt = performance.now();
     const time = new Date().toISOString();
     const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -143,7 +146,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     const url = new URL(c.req.url);
     const fromUrl = adapter.fromUrl?.(url) ?? {};
-    const entry = { event: "route", time, path: c.req.path, model: req?.model ?? fromUrl.model, tools: tools ?? req?.tools?.length ?? 0 };
+    const entry = { event: "route", time, client: profile?.name ?? config.client, path: c.req.path, model: req?.model ?? fromUrl.model, tools: tools ?? req?.tools?.length ?? 0 };
     if (req && decision.mode === "direct") {
       log({ ...entry, ...decision });
       const call = { tool: decision.tool, args: decision.args, inputTokens: decision.jev?.inputTokens ?? 0 };
@@ -157,7 +160,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     if (req && decision.mode !== "passthrough") {
       const rewritten = adapter.apply(req, decision, config.argsModel);
       const body = JSON.stringify(rewritten);
-      const response = await forward(c.req.raw, config, fetchImpl, { body, responseHeaders: decisionHeaders(decision) });
+      const response = await forward(c.req.raw, config, fetchImpl, { body, responseHeaders: decisionHeaders(decision), profile });
       const sent = { mode: decision.mode, model: rewritten.model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
       dumpResponse("rejected", response, { sent });
       if (response.status !== 400 && response.status !== 422) {
@@ -171,6 +174,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     }
 
     const response = await forward(c.req.raw, config, fetchImpl, {
+      profile,
       body: bytes,
       responseHeaders: decisionHeaders(decision),
     });
@@ -179,7 +183,9 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     return response;
   };
 
-  app.get("/health", (c) => c.json({ status: "ok", pid: process.pid, upstream: config.upstreamBaseUrl, jev: config.jevProvider }));
+  app.get("/health", (c) =>
+    c.json({ status: "ok", pid: process.pid, upstream: config.upstreamBaseUrl, jev: config.jevProvider, tools: profiles.map((profile) => profile.name) }),
+  );
 
   app.use("*", async (c, next) => {
     if (!config.routerApiKey) return next();
@@ -216,25 +222,26 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
   app.route(
     "/dashboard",
-    dashboardRoutes(config, events, { get: () => routing, set: (enabled) => void (routing = enabled) }),
+    dashboardRoutes(config, events, { get: () => routing, set: (enabled) => void (routing = enabled) }, profiles),
   );
 
-  app.post("/v1/chat/completions", route(chatAdapter));
-  app.post("/v1/responses", route(responsesAdapter));
-  app.post("/v1/messages", route(messagesAdapter));
-  app.post("/v1beta/models/*", route(geminiAdapter));
-
-  // Everything else (models, embeddings, …) is proxied untouched.
-  app.all("/v1/*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
-  });
-  app.all("/v1beta/*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
-  });
+  /** The routed endpoints and the catch-all proxy, at the root or under one tool's prefix. */
+  const mount = (base: string, profile?: Profile) => {
+    app.post(`${base}/v1/chat/completions`, route(chatAdapter, profile));
+    app.post(`${base}/v1/responses`, route(responsesAdapter, profile));
+    app.post(`${base}/v1/messages`, route(messagesAdapter, profile));
+    app.post(`${base}/v1beta/models/*`, route(geminiAdapter, profile));
+    // Everything else (models, embeddings, …) is proxied untouched.
+    for (const rest of [`${base}/v1/*`, `${base}/v1beta/*`]) {
+      app.all(rest, async (c) => {
+        const response = await forward(c.req.raw, config, fetchImpl, { profile });
+        dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+        return response;
+      });
+    }
+  };
+  mount("");
+  for (const profile of profiles) mount(`/${profile.name}`, profile);
 
   return app;
 }

@@ -31,6 +31,7 @@
     "node": ">=22.15"
   },
   "bin": {
+    "jev-gateway": "bin/jev-gateway.mjs",
     "jev-codex": "bin/jev-codex.mjs",
     "jev-claude": "bin/jev-claude.mjs",
     "jev-opencode": "bin/jev-opencode.mjs",

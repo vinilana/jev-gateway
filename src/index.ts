@@ -4,12 +4,14 @@ import { loadConfig } from "./config.js";
 import { createDump } from "./debug.js";
 import { createAskJev } from "./jev.js";
 import { createEventLog } from "./events.js";
+import { loadProfiles } from "./profiles.js";
 
 const config = loadConfig();
 
 const app = createApp({
   config,
   askJev: createAskJev(config),
+  profiles: loadProfiles(),
   dump: createDump(config.debugDumpDir),
   events: createEventLog({ historyFile: config.logFile }),
   log: (entry) => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry })),

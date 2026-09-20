@@ -8,6 +8,8 @@ import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 export interface RouteEvent {
   seq: number;
   time: string;
+  /** The tool the request came from, when one gateway serves several (see profiles.ts). */
+  client?: string;
   path: string;
   model?: string;
   tools: number;
@@ -48,6 +50,7 @@ function toEvent(entry: Record<string, unknown>, seq: number): RouteEvent | unde
   return {
     seq,
     time: text(entry.time) ?? new Date().toISOString(),
+    client: text(entry.client, 40),
     path: text(entry.path) ?? "",
     model: text(entry.model),
     tools: number(entry.tools) ?? 0,

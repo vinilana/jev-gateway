@@ -246,7 +246,7 @@ async function poll(source) {
       return poll(source);
     }
     source.router = data.router;
-    source.events = source.events.concat(data.events.map((event) => ({ ...event, client: data.router.client, port: source.port }))).slice(-KEPT_PER_ROUTER);
+    source.events = source.events.concat(data.events.map((event) => ({ ...event, client: event.client ?? data.router.client, port: source.port }))).slice(-KEPT_PER_ROUTER);
     source.lastSeq = data.events.length ? data.events.at(-1).seq : source.lastSeq;
     source.up = source.seen = true;
   } catch {
@@ -452,7 +452,8 @@ function renderRows(events) {
 }
 
 function renderControls() {
-  const clients = [...new Set(sources.filter((source) => source.router).map((source) => source.router.client))];
+  // One gateway can serve several tools, so the tools come from the events, not from the gateways.
+  const clients = [...new Set(sources.flatMap((source) => source.events.map((event) => event.client)))].sort();
   const button = (label, pressed, press) => {
     const node = h("button", { type: "button", "aria-pressed": String(pressed) }, label);
     node.addEventListener("click", () => { press(); signature = ""; render(); });

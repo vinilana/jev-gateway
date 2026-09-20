@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import type { Profile } from "./profiles.js";
 
 // Hop-by-hop and length/encoding headers must not cross the proxy: fetch re-frames
 // (and transparently decompresses) bodies, so the originals would be wrong.
@@ -13,6 +14,8 @@ export interface ForwardOptions {
   body?: string | Uint8Array;
   /** Headers added to the response so callers can see what the router did. */
   responseHeaders?: Record<string, string>;
+  /** The tool this request came in under: its own upstream, and a path prefix to take off first. */
+  profile?: Profile;
 }
 
 /**
@@ -48,7 +51,9 @@ export async function forward(
   const url = new URL(incoming.url);
   // The upstream base already ends in its own `/v1`, so that one segment is dropped. Only that
   // segment: Gemini's `/v1beta/...` is a different prefix and goes upstream as it came.
-  const target = config.upstreamBaseUrl + url.pathname.replace(/^\/v1(?=\/|$)/, "") + url.search;
+  const { profile } = options;
+  const path = profile && url.pathname.startsWith(`/${profile.name}/`) ? url.pathname.slice(profile.name.length + 1) : url.pathname;
+  const target = (profile?.upstream ?? config.upstreamBaseUrl) + path.replace(/^\/v1(?=\/|$)/, "") + url.search;
 
   const headers = new Headers();
   incoming.headers.forEach((value, name) => {

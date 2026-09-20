@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import type { Config } from "./config.js";
 import type { EventLog } from "./events.js";
+import type { Profile } from "./profiles.js";
 
 // A real .html file rather than a string in a module, so it stays editable as HTML; `pnpm build`
 // copies it next to the compiled output.
@@ -19,7 +20,7 @@ export interface RoutingSwitch {
   set(enabled: boolean): void;
 }
 
-export function dashboardRoutes(config: Config, events: EventLog, routing: RoutingSwitch) {
+export function dashboardRoutes(config: Config, events: EventLog, routing: RoutingSwitch, profiles: Profile[] = []) {
   const startedAt = new Date().toISOString();
   const routes = new Hono();
 
@@ -39,6 +40,7 @@ export function dashboardRoutes(config: Config, events: EventLog, routing: Routi
         upstream: config.upstreamBaseUrl,
         jevModel: config.jevModel,
         jevProvider: config.jevProvider,
+        tools: profiles.map((profile) => ({ name: profile.name, upstream: profile.upstream })),
         minConfidence: config.minConfidence,
         routing: routing.get(),
         // Sequence numbers restart with the process: a page that sees this change starts over.
