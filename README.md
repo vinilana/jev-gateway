@@ -5,8 +5,8 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex**, **Claude Code** and **OpenCode** out of the box, including on ChatGPT and
-claude.ai subscriptions, with Gemini API clients, and with any client that speaks the OpenAI,
+It works with **Codex**, **Claude Code**, **OpenCode** and **Antigravity CLI** out of the box, including on ChatGPT and
+claude.ai subscriptions, Google Cloud Code / Gemini subscriptions, with Gemini API clients, and with any client that speaks the OpenAI,
 Anthropic or Google Gemini APIs.
 
 > Independent project, not affiliated with or endorsed by TypeSafe. "Jev" is TypeSafe's model and
@@ -27,10 +27,11 @@ npm install -g jev-gateway
 **2. Run your agent through the gateway**
 
 ```bash
-jev-codex      # use it exactly like `codex`
-jev-claude     # use it exactly like `claude`
-jev-opencode   # use it exactly like `opencode` (stable v1)
-jev-gemini     # Gemini CLI, with a Gemini API key
+jev-codex       # use it exactly like `codex`
+jev-claude      # use it exactly like `claude`
+jev-opencode    # use it exactly like `opencode` (stable v1)
+jev-gemini      # Gemini CLI, with a Gemini API key
+jev-antigravity # use it exactly like `agy` (or `jev-agy`)
 ```
 
 **3. Answer two questions, once**
@@ -55,13 +56,13 @@ The key works (Jev answered in 712 ms).
 jev-codex --dashboard
 ```
 
-That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`, or
-`~/.config/opencode` is changed, and plain `codex`, `claude`, and `opencode` still behave as
+That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`, `~/.config/opencode`
+or `~/.gemini/antigravity-cli` is changed, and plain `codex`, `claude`, `opencode` and `agy` still behave as
 before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## What to expect
 
-- The first `jev-codex`, `jev-claude`, or `jev-opencode` starts a small gateway in the background
+- The first `jev-codex`, `jev-claude`, `jev-opencode` or `jev-antigravity` starts a small gateway in the background
   and then opens your agent. Every argument is passed through, so `jev-codex exec "fix the
   failing test"` works like `codex exec "fix the failing test"`.
 - The gateway keeps running after you close the agent, so the next session starts instantly. Stop it
@@ -74,7 +75,7 @@ before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini`.
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-gemini` and `jev-antigravity` (or `jev-agy`).
 
 | Command | What it does |
 | --- | --- |
@@ -90,8 +91,8 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791 and Gemini clients 8788. Change them with
-`JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT` and `JEV_GEMINI_PORT`.
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788 and Antigravity CLI 8787. Change them with
+`JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`, `JEV_GEMINI_PORT` and `JEV_ANTIGRAVITY_PORT`.
 
 ## Dashboard
 
@@ -100,7 +101,7 @@ jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard
 ```
 
 This opens `http://localhost:8790/dashboard`. If no browser window appears, paste that address into
-your browser. One page shows each gateway (Codex, Claude, and OpenCode) and refreshes every
+your browser. One page shows each gateway (Codex, Claude, OpenCode, and Antigravity) and refreshes every
 2 seconds.
 
 You will see:
@@ -323,6 +324,26 @@ This covers clients that use a **Gemini API key**. A Gemini CLI signed in with a
 talks to a different Google service and does not go through the gateway. The Gemini path has unit
 tests but has not yet been run against the real API.
 
+## Using it with Antigravity CLI
+
+`jev-antigravity` (or `jev-agy`) runs Google Antigravity CLI (`agy`) with `CLOUD_CODE_URL`,
+`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` pointed at a gateway on port 8787.
+
+Every flag is passed through, so commands like `jev-antigravity --mode plan` or `jev-agy` work
+seamlessly with full plan mode and workflow support.
+
+### Upstream and routing
+
+- **Logged in with Google account / Plan mode (Cloud Code)**: By default, the gateway forwards to
+  `https://daily-cloudcode-pa.googleapis.com` (override with `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL`).
+  The gateway routes Cloud Code's wrapped `/v1internal:generateContent`, `/v1internal:streamGenerateContent`,
+  `/v1internal/models/*`, and project endpoints (`/v1beta/projects/*`, `/v1beta1/projects/*`),
+  unwrapping payloads for Jev decisions, forcing tools via `toolConfig`, and wrapping direct responses
+  back into Cloud Code's expected `{ response: ... }` format. Management calls such as
+  `/v1internal:loadCodeAssist` pass through untouched.
+- **Gemini API Key mode**: If `GEMINI_API_KEY` is set in your environment or `~/.gemini/antigravity-cli/settings.json` has `"modelProvider": "gemini"`,
+  the gateway defaults to forwarding to `https://generativelanguage.googleapis.com`.
+
 ## Running it as a server for your own app
 
 Work from a checkout:
@@ -340,7 +361,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8787/v1")  # your usual provider key still works
 ```
 
-The gateway routes four endpoints and proxies every other `/v1/*` or `/v1beta/*` path unchanged:
+The gateway routes six endpoints and proxies every other `/v1/*`, `/v1beta/*` or `/v1internal/*` path unchanged:
 
 | Endpoint | API |
 | --- | --- |
@@ -348,6 +369,8 @@ The gateway routes four endpoints and proxies every other `/v1/*` or `/v1beta/*`
 | `POST /v1/responses` | OpenAI Responses |
 | `POST /v1/messages` | Anthropic Messages |
 | `POST /v1beta/models/*` | Google Gemini API (`generateContent`, `streamGenerateContent`) |
+| `POST /v1internal:generateContent`, `:streamGenerateContent` | Cloud Code / Antigravity internal content generation |
+| `POST /v1beta/projects/*`, `/v1beta1/projects/*` | Cloud Code / Antigravity project content generation |
 
 By default your client's own `Authorization` header is forwarded to the provider. Set
 `UPSTREAM_API_KEY` to have the gateway hold the provider key instead, and `ROUTER_API_KEY` to
