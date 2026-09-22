@@ -261,4 +261,68 @@ describe("POST /v1/responses", () => {
     expect(jev.requests).toHaveLength(0);
     expect(res.headers.get("x-jev-gateway-reason")).toBe("previous_response_id");
   });
+
+  it("leaves agent messages to the model even when their content is readable", async () => {
+    const { post, jev, upstream } = setup({ tool: { choice: NO_TOOL }, needs_tool: { noul: 0.1 } });
+    const request = codexRequest();
+    const body = {
+      ...request,
+      input: [...request.input, {
+        type: "agent_message",
+        author: "/root",
+        recipient: "/root/reviewer",
+        content: [{ type: "input_text", text: "Read main.py and report what it does." }],
+      }],
+    };
+    const res = await post(JSON.stringify(body));
+
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("agent_message");
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]!.body).toEqual(body);
+  });
+
+  it.each([false, true])("forwards encrypted agent messages untouched (compressed: %s)", async (compressed) => {
+    const request = codexLiteRequest({ model: "gpt-5.6-luna" });
+    const raw = Buffer.from(JSON.stringify({
+      ...request,
+      input: [...request.input, {
+        type: "agent_message",
+        author: "/root",
+        recipient: "/root/reviewer",
+        content: [
+          { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+          { type: "encrypted_content", encrypted_content: "opaque-delegated-task" },
+        ],
+      }],
+    }, null, 2));
+    const body = compressed ? zstdCompressSync(raw) : raw;
+    const reply = 'data: {"type":"response.completed"}\n\ndata: [DONE]\n\n';
+    const jev = fakeJev({ tool: { choice: NO_TOOL, confidence: 0.98 }, needs_tool: { noul: 0.16 } });
+    const seen: { body: unknown; encoding: string | null }[] = [];
+    const app = createApp({
+      config: testConfig(),
+      askJev: jev.askJev,
+      fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ body: init?.body, encoding: new Headers(init?.headers).get("content-encoding") });
+        return new Response(reply, { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch,
+    });
+    const res = await app.request("/v1/responses", {
+      method: "POST",
+      headers: compressed ? { "content-encoding": "zstd" } : {},
+      body,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("agent_message");
+    expect(jev.requests).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+    expect(Buffer.from(seen[0]!.body as Uint8Array).equals(body)).toBe(true);
+    expect(seen[0]!.encoding).toBe(compressed ? "zstd" : null);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(await res.text()).toBe(reply);
+  });
 });

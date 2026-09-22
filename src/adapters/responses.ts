@@ -103,6 +103,8 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
   // With server-side history the router would be judging a conversation it cannot see.
   if (req.previous_response_id) return { skip: "previous_response_id" };
   const items = inputItems(req);
+  // Delegated tasks and replies use a separate message format whose content may be encrypted.
+  if (items.some((item) => item.type === "agent_message")) return { skip: "agent_message" };
   const clip = (value: unknown) => truncate(typeof value === "string" ? value : textOf(value), maxMessageChars);
 
   const toolNameByCallId = new Map<string, string>();

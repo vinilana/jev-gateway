@@ -399,6 +399,10 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | `none` | Jev is confident that no tool is needed | Forwarded with `tool_choice: "none"` |
 | `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, or the caller already chose | Forwarded byte for byte. `x-jev-gateway-reason` says why |
 
+Responses requests containing Codex `agent_message` items pass through without consulting Jev,
+with reason `agent_message`. These carry delegated tasks or replies that the router cannot
+interpret and may contain encrypted content, so the model keeps control of tool selection.
+
 Tool lists longer than 120 entries (Claude Code sends about 280) take two Jev calls. The first ranks
 the list in groups. The second decides among the top 3 of each group, using full descriptions.
 
