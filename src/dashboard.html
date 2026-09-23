@@ -170,6 +170,7 @@ const REASONS = {
   no_tools: ["Jev not asked", "The request carried no tools, so there was nothing to select."],
   no_messages: ["Jev not asked", "The request had no conversation to decide on."],
   previous_response_id: ["Jev not asked", "The conversation lives upstream (previous_response_id); the router can't see it."],
+  agent_message: ["Jev not asked", "The conversation holds a message between Codex agents (agent_message), which the router cannot read."],
   non_function_tools: ["Jev not asked", "The roster has tools that aren't plain functions."],
   malformed_tools: ["Jev not asked", "A tool in the roster has no name or no type; upstream gets to reject it."],
   unsafe_tool_name: ["Jev not asked", "A tool's name has spaces, quotes or brackets in it. No provider accepts such a name, and the router won't repeat it to a model."],
