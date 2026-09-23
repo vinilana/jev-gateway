@@ -407,6 +407,19 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 Tool lists longer than 120 entries (Claude Code sends about 280) take two Jev calls. The first ranks
 the list in groups. The second decides among the top 3 of each group, using full descriptions.
 
+Routing state retains a contiguous suffix of complete call/result groups. Calls and results are
+associated by observed IDs; Gemini IDs are retained when supplied. Without IDs, only an unambiguous
+pending call with the same tool name can be associated. Overlapping parallel-call spans stay in
+their original chronological order. Orphaned or ambiguous retained results bypass Jev with
+`incomplete_routing_context`.
+
+Clipping is recorded as `clipped: true` in Jev's state, not inferred from conversation text.
+Ordinary clipped output still routes. The newest group can be shortened to fit while retaining
+its identities; if even its structure and metadata cannot fit, the request bypasses unchanged.
+The budget covers the complete JSON serialization, including escaping, envelope, and metadata,
+measured in JavaScript UTF-16 code units. Text clipping never splits a surrogate pair. Only Jev's
+request is shortened; the provider request and the caller's input remain intact.
+
 ## Configuration
 
 Settings are environment variables. The launchers read them from your shell,
@@ -422,6 +435,8 @@ list. The ones worth knowing:
 | `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM |
 | `JEV_ROUTING` | `on` | Set to `off` to start in baseline mode |
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
+| `JEV_MAX_STATE_CHARS` | `60000` | Serialized routing-state budget; integer at least 64 |
+| `JEV_MAX_MESSAGE_CHARS` | `4000` | Per-text-field routing limit; positive integer |
 | `ARGS_MODEL` | unset | A cheaper model for filling arguments in `forced` mode |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |

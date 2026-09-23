@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Decision } from "../decide.js";
-import { textOf, truncate } from "../state.js";
+import { textOf } from "../state.js";
 import type { ChatRequest, DirectCall, RouterInput, RouterTool, ToolDef, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
 
@@ -46,12 +46,13 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
   const system: string[] = [];
   const turns: Turn[] = [];
   for (const message of req.messages) {
-    const text = truncate(textOf(message.content), maxMessageChars);
+    const text = textOf(message.content);
     if (message.role === "system" || message.role === "developer") {
       if (text) system.push(text);
     } else if (message.role === "tool") {
       turns.push({
         role: "tool_result",
+        ...(typeof message.tool_call_id === "string" ? { call_id: message.tool_call_id } : {}),
         tool: toolNameByCallId.get(message.tool_call_id ?? "") ?? "unknown",
         content: text,
       });
@@ -61,7 +62,8 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
         ...(text ? { text } : {}),
         tool_calls: message.tool_calls.map((call) => ({
           tool: call.function.name,
-          arguments: truncate(call.function.arguments, maxMessageChars),
+          ...(typeof call.id === "string" ? { call_id: call.id } : {}),
+          arguments: call.function.arguments,
         })),
       });
     } else {

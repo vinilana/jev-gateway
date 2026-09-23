@@ -168,6 +168,7 @@ const CATEGORIES = [
 // [who made the call, what it means]
 const REASONS = {
   no_tools: ["Jev not asked", "The request carried no tools, so there was nothing to select."],
+  incomplete_routing_context: ["Jev not asked", "Retained call/result identities are ambiguous or their structure cannot fit the routing-state budget."],
   no_messages: ["Jev not asked", "The request had no conversation to decide on."],
   previous_response_id: ["Jev not asked", "The conversation lives upstream (previous_response_id); the router can't see it."],
   non_function_tools: ["Jev not asked", "The roster has tools that aren't plain functions."],

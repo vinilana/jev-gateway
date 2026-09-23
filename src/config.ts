@@ -90,5 +90,13 @@ export function loadConfig(env: Env = process.env): Config {
   if (config.routerApiKey && !config.upstreamApiKey) {
     throw new Error("ROUTER_API_KEY requires UPSTREAM_API_KEY (the client key is not valid upstream)");
   }
+  for (const [key, value, minimum] of [
+    ["JEV_MAX_STATE_CHARS", config.maxStateChars, 64],
+    ["JEV_MAX_MESSAGE_CHARS", config.maxMessageChars, 1],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < minimum) {
+      throw new Error(`${key} must be an integer of at least ${minimum}, got "${env[key] ?? value}"`);
+    }
+  }
   return config;
 }

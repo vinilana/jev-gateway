@@ -64,8 +64,8 @@ describe("POST /v1/messages", () => {
       conversation: [
         { role: "user", text: "what does main.py do?" },
         { role: "assistant", text: "Let me look." },
-        { role: "assistant", tool_calls: [{ tool: "Bash", arguments: '{"command":"ls"}' }] },
-        { role: "tool_result", tool: "Bash", content: "main.py" },
+        { role: "assistant", tool_calls: [{ tool: "Bash", call_id: "toolu_1", arguments: '{"command":"ls"}' }] },
+        { role: "tool_result", tool: "Bash", call_id: "toolu_1", content: "main.py" },
       ],
     });
     const tool = questions.tool!;

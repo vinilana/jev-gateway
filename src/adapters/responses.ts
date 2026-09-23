@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Decision } from "../decide.js";
-import { textOf, truncate } from "../state.js";
+import { textOf } from "../state.js";
 import type { DirectCall, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
 
@@ -103,7 +103,6 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
   // With server-side history the router would be judging a conversation it cannot see.
   if (req.previous_response_id) return { skip: "previous_response_id" };
   const items = inputItems(req);
-  const clip = (value: unknown) => truncate(typeof value === "string" ? value : textOf(value), maxMessageChars);
 
   const toolNameByCallId = new Map<string, string>();
   const system = typeof req.instructions === "string" && req.instructions ? [req.instructions] : [];
@@ -111,7 +110,7 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
   for (const item of items) {
     const type = item.type ?? (item.role ? "message" : undefined);
     if (type === "message") {
-      const text = clip(item.content);
+      const text = textOf(item.content);
       if (item.role === "system" || item.role === "developer") {
         if (text) system.push(text);
       } else {
@@ -122,19 +121,20 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
       if (item.call_id) toolNameByCallId.set(item.call_id, name);
       turns.push({
         role: "assistant",
-        tool_calls: [{ tool: name, arguments: clip(item.arguments ?? item.input ?? "") }],
+        tool_calls: [{ tool: name, ...(typeof item.call_id === "string" ? { call_id: item.call_id } : {}), arguments: textOf(item.arguments ?? item.input ?? "") }],
       });
     } else if (type === "local_shell_call") {
       if (item.call_id) toolNameByCallId.set(item.call_id, "local_shell");
       turns.push({
         role: "assistant",
-        tool_calls: [{ tool: "local_shell", arguments: clip((item.action?.command ?? []).join(" ")) }],
+        tool_calls: [{ tool: "local_shell", ...(typeof item.call_id === "string" ? { call_id: item.call_id } : {}), arguments: (item.action?.command ?? []).join(" ") }],
       });
     } else if (type?.endsWith("_call_output")) {
       turns.push({
         role: "tool_result",
+        ...(typeof item.call_id === "string" ? { call_id: item.call_id } : {}),
         tool: toolNameByCallId.get(item.call_id ?? "") ?? "unknown",
-        content: clip(item.output),
+        content: textOf(item.output),
       });
     }
     // Reasoning items (encrypted), item references and hosted-tool traces carry nothing Jev can read.

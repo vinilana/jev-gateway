@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Decision } from "../decide.js";
-import { textOf, truncate } from "../state.js";
+import { textOf } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
 
@@ -49,19 +49,18 @@ function toTools(raw: MessagesTool[]): RouterTool[] {
 
 function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
-  const clip = (value: unknown) => truncate(textOf(value), maxMessageChars);
 
   const toolNameById = new Map<string, string>();
   const turns: Turn[] = [];
   for (const message of req.messages) {
     if (typeof message.content === "string") {
-      turns.push({ role: message.role, text: clip(message.content) });
+      turns.push({ role: message.role, text: message.content });
       continue;
     }
     // One message can interleave prose, tool calls and tool results; Jev reads them as separate turns.
     const text: Block[] = [];
     const flushText = () => {
-      if (text.length) turns.push({ role: message.role, text: clip(text.splice(0)) });
+      if (text.length) turns.push({ role: message.role, text: textOf(text.splice(0)) });
     };
     for (const block of message.content ?? []) {
       if (block.type === "tool_use" || block.type === "server_tool_use") {
@@ -69,14 +68,15 @@ function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | {
         if (block.id && block.name) toolNameById.set(block.id, block.name);
         turns.push({
           role: "assistant",
-          tool_calls: [{ tool: block.name ?? "unknown", arguments: clip(JSON.stringify(block.input ?? {})) }],
+          tool_calls: [{ tool: block.name ?? "unknown", ...(typeof block.id === "string" ? { call_id: block.id } : {}), arguments: JSON.stringify(block.input ?? {}) }],
         });
       } else if (block.type === "tool_result" || block.type.endsWith("_tool_result")) {
         flushText();
         turns.push({
           role: "tool_result",
+          ...(typeof block.tool_use_id === "string" ? { call_id: block.tool_use_id } : {}),
           tool: toolNameById.get(block.tool_use_id ?? "") ?? "unknown",
-          content: clip(block.content),
+          content: textOf(block.content),
         });
       } else if (block.type !== "thinking" && block.type !== "redacted_thinking") {
         text.push(block);
