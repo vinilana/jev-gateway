@@ -41,7 +41,7 @@ or another provider's: see [Where Jev runs](README.md#where-jev-runs)).
 [`POST /router/decide`](README.md#try-a-decision-without-calling-any-llm) shows what Jev decides
 for a request without calling any LLM.
 
-**Through a launcher.** `pnpm codex`, `pnpm claude`, `pnpm opencode` and `pnpm gemini` run the
+**Through a launcher.** `pnpm codex`, `pnpm claude`, `pnpm opencode`, `pnpm gemini` and `pnpm kiro` run the
 launchers in `bin/`. In a checkout they start the gateway from the TypeScript sources, so there
 is no build step. With no key for Jev configured, the first run asks for one, exactly as an
 installed launcher does. The gateway keeps running in the background between sessions, which
@@ -74,7 +74,7 @@ reliable specification. Dumps hold whole conversations: keep them out of commits
 src/index.ts          entry point: config, the Jev transport, the HTTP server
 src/app.ts            routes, auth, headers, and the resend-on-rejection fallback
 src/adapters/         one file per wire format: chat.ts, responses.ts (Codex),
-                      messages.ts (Claude Code), gemini.ts; adapter.ts is the interface
+                      messages.ts (Claude Code), gemini.ts, kiro.ts; adapter.ts is the interface
 src/state.ts          turns a conversation into Jev state
 src/questions.ts      turns tools into Jev questions and finds closed-set arguments
 src/decide.ts         the mode decision
@@ -115,7 +115,8 @@ otherwise.
   row field by field instead of passing log entries to the browser.
 - **The client's own configuration is never written.** Launchers point a client at the gateway
   through arguments and environment variables for that one process. Nothing in `~/.codex`,
-  `~/.claude` or `~/.config/opencode` is modified.
+  `~/.claude`, `~/.config/opencode` or `~/.kiro` is modified. (`jev-kiro` gives Kiro a home of
+  its own instead, because Kiro reads its endpoint from nowhere else.)
 - **Prompt caches survive.** Where rewriting a request would invalidate a cached prefix, the
   gateway adds a hint after the client's last block instead (`hint` mode).
 - **Few dependencies.** The published package has a handful. A new one needs a reason a few lines of

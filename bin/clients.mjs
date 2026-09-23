@@ -1,6 +1,5 @@
 // How each coding agent is pointed at a gateway. Shared by the launchers and the benchmark runner,
-// so a benchmark drives an agent exactly the way `jev-codex`, `jev-claude`, and `jev-opencode` do.
-import { readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -157,3 +156,106 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
+function kiroRegion() {
+  return process.env.JEV_KIRO_REGION ?? "us-east-1";
+}
+
+function kiroUpstream() {
+  return process.env.JEV_KIRO_UPSTREAM_BASE_URL ?? `https://q.${kiroRegion()}.amazonaws.com`;
+}
+
+const isPresent = (path) => {
+  try {
+    return Boolean(lstatSync(path));
+  } catch {
+    return false;
+  }
+};
+
+const ignoreRace = (error) => {
+  if (error?.code !== "EEXIST" && error?.code !== "ENOENT") throw error;
+};
+
+function mirror(from, to, skip) {
+  mkdirSync(to, { recursive: true });
+  let names = [];
+  try {
+    names = readdirSync(from).filter((name) => !skip.includes(name));
+  } catch {}
+  const shadowing = [];
+  for (const name of readdirSync(to)) {
+    if (skip.includes(name)) continue;
+    const path = join(to, name);
+    try {
+      if (!lstatSync(path).isSymbolicLink()) shadowing.push(path);
+      else if (!names.includes(name)) rmSync(path);
+    } catch (error) {
+      ignoreRace(error);
+    }
+  }
+  for (const name of names) {
+    if (isPresent(join(to, name))) continue;
+    try {
+      symlinkSync(join(from, name), join(to, name));
+    } catch (error) {
+      ignoreRace(error);
+    }
+  }
+  return shadowing;
+}
+
+const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;
+
+function writeAtomic(file, content) {
+  writeFileSync(`${file}.${process.pid}`, content);
+  renameSync(`${file}.${process.pid}`, file);
+}
+
+function kiroHome(origin) {
+  const real = homedir();
+  const home = join(real, ".jev-gateway", "kiro-home");
+  const shadowing = [
+    ...mirror(real, home, [".kiro", ".jev-gateway"]),
+    ...mirror(join(real, ".kiro"), join(home, ".kiro"), ["settings"]),
+    ...mirror(join(real, ".kiro", "settings"), join(home, ".kiro", "settings"), ["cli.json"]),
+  ];
+  if (shadowing.length) {
+    console.error(
+      `jev-kiro: these were written inside Kiro's own home, and Kiro sees them instead of yours:\n` +
+        shadowing.map((path) => `  ${path}`).join("\n") +
+        `\n  Move them to your home folder, or remove them, to see yours again.`,
+    );
+  }
+  let cli = {};
+  try {
+    cli = JSON.parse(readFileSync(join(real, ".kiro", "settings", "cli.json"), "utf8"));
+  } catch {}
+  cli["api.codewhisperer.service"] = { endpoint: origin, region: kiroRegion() };
+  writeAtomic(join(home, ".kiro", "settings", "cli.json"), JSON.stringify(cli, null, 2));
+  return home;
+}
+
+function kiroBashEnv() {
+  const real = homedir();
+  const file = join(real, ".jev-gateway", "kiro-bash-env.sh");
+  const previous = process.env.BASH_ENV;
+  const chained = previous && previous !== file ? `. ${shellQuote(previous)}\n` : "";
+  writeAtomic(file, `export HOME=${shellQuote(real)}\n${chained}`);
+  return file;
+}
+
+export const kiro = {
+  name: "jev-kiro",
+  client: "kiro-cli",
+  portEnv: "JEV_KIRO_PORT",
+  defaultPort: 8793,
+  upstream: kiroUpstream,
+  upstreamHelp:
+    "JEV_KIRO_REGION              region of your Kiro profile (default us-east-1)\n" +
+    "JEV_KIRO_UPSTREAM_BASE_URL   where Kiro traffic goes (default https://q.<region>.amazonaws.com)",
+  env: (origin) => ({ HOME: kiroHome(origin), BASH_ENV: kiroBashEnv() }),
+  configHelp: (origin) =>
+    `# Keep the gateway running (jev-kiro --start), then add to ~/.kiro/settings/cli.json:\n` +
+    JSON.stringify({ "api.codewhisperer.service": { endpoint: origin, region: kiroRegion() } }, null, 2) +
+    `\n# Plain kiro-cli then always goes through the gateway; remove the entry to stop.`,
+};

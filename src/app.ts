@@ -4,6 +4,7 @@ import { Hono, type Context } from "hono";
 import type { Adapter } from "./adapters/adapter.js";
 import { chatAdapter } from "./adapters/chat.js";
 import { geminiAdapter } from "./adapters/gemini.js";
+import { KIRO_CHAT_TARGET, kiroAdapter } from "./adapters/kiro.js";
 import { messagesAdapter } from "./adapters/messages.js";
 import { responsesAdapter } from "./adapters/responses.js";
 import type { Config } from "./config.js";
@@ -237,17 +238,18 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/router/decide", async (c) => {
     const req = parseBody<Record<string, unknown>>(new Uint8Array(await c.req.arrayBuffer()), undefined);
     if (!req) return c.json({ error: { message: "Body must be a JSON object", type: "invalid_request_error" } }, 400);
-    const adapters = { chat: chatAdapter, responses: responsesAdapter, messages: messagesAdapter, gemini: geminiAdapter };
+    const adapters = { chat: chatAdapter, responses: responsesAdapter, messages: messagesAdapter, gemini: geminiAdapter, kiro: kiroAdapter };
     // Chat Completions and Anthropic Messages both use `messages`; only Anthropic has a top-level
-    // `system` or tools described by `input_schema`. Gemini uses `contents`.
     const tools = Array.isArray(req.tools) ? (req.tools as Record<string, unknown>[]) : [];
-    const guess = "contents" in req
-      ? "gemini"
-      : !("messages" in req)
-        ? "responses"
-        : "system" in req || tools.some((tool) => "input_schema" in tool)
-          ? "messages"
-          : "chat";
+    const guess = "conversationState" in req
+      ? "kiro"
+      : "contents" in req
+        ? "gemini"
+        : !("messages" in req)
+          ? "responses"
+          : "system" in req || tools.some((tool) => "input_schema" in tool)
+            ? "messages"
+            : "chat";
     const format = (c.req.query("format") ?? guess) as keyof typeof adapters;
     const adapter = (adapters[format] ?? adapters[guess]) as Adapter<AnyRequest>;
     return c.json((await decideFor(adapter, req)).decision);
@@ -264,15 +266,19 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/v1beta/models/*", route(geminiAdapter));
 
   // Everything else (models, embeddings, …) is proxied untouched.
-  app.all("/v1/*", async (c) => {
+  const proxy = async (c: Context) => {
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
-  });
-  app.all("/v1beta/*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
+  };
+  app.all("/v1/*", proxy);
+  app.all("/v1beta/*", proxy);
+
+  const kiroChat = route(kiroAdapter);
+  app.post("/", async (c) => {
+    const target = c.req.header("x-amz-target");
+    if (!target) return c.notFound();
+    return target === KIRO_CHAT_TARGET ? kiroChat(c) : proxy(c);
   });
 
   return app;

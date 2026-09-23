@@ -139,7 +139,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
     }
     const built = buildQuestions(tools, {
       allowNone: input.toolChoice !== "required",
-      withArgs: config.directCalls,
+      withArgs: config.directCalls && input.direct !== false,
     });
     plans = built.plans;
     result = await askJev({ state, questions: built.questions, model: config.jevModel });
