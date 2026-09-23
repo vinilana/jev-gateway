@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2](https://github.com/vinilana/jev-gateway/compare/v0.4.1...v0.4.2) (2026-09-23)
+
+
+### Fixed
+
+* **dashboard:** probe unused peer ports less often, and allow ?peers=none ([fbe327d](https://github.com/vinilana/jev-gateway/commit/fbe327d4b1cbf4c094074ab837c965ac358808f8))
+* honour JEV_DIRECT_CALLS=false for tools with no open arguments ([aa5af35](https://github.com/vinilana/jev-gateway/commit/aa5af3580ff4c30282187cae9f07428c724cb098))
+* **opencode:** say which agents bypass the gateway, and keep an inherited inline config ([384e7f4](https://github.com/vinilana/jev-gateway/commit/384e7f40779c7b12fe2f1625092364ece9abf483))
+
 ## [0.4.1](https://github.com/vinilana/jev-gateway/compare/v0.4.0...v0.4.1) (2026-09-20)
 
 
