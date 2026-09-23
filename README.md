@@ -349,8 +349,8 @@ dashboard.
 `jev-kilo --print-config` prints the same provider as a `kilo.jsonc` snippet, to point plain `kilo`
 at a gateway kept running with `jev-kilo --start`.
 
-Run end to end with a real Kilo CLI and the real Kilo Gateway, with `scripts/mock-jev.mjs` in
-place of Jev. Not yet run with a real Jev key.
+Run end to end with a real Kilo CLI, the real Kilo Gateway and the real Jev (TypeSafe), on
+`kilo-auto/free`: Jev picked `read` twice and then `none`, each call in under half a second.
 
 ## Using it with Gemini
 
