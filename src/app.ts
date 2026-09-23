@@ -53,9 +53,14 @@ function parseBody<Req>(bytes: Uint8Array, encoding: string | undefined): Req | 
   }
 }
 
+// A reason can quote whatever Jev's provider answered, such as an HTML block page. Headers.set
+// throws on line breaks and on characters beyond Latin-1, and it would throw after the request
+// had reached the upstream, so the client got a 500 instead of the reply it paid for.
+const headerSafe = (value: string) => value.replace(/[^\x20-\x7e]+/g, " ");
+
 function decisionHeaders(decision: Decision): Record<string, string> {
   const headers: Record<string, string> = { "x-jev-gateway-mode": decision.mode };
-  if (decision.mode === "passthrough") headers["x-jev-gateway-reason"] = decision.reason.slice(0, 120);
+  if (decision.mode === "passthrough") headers["x-jev-gateway-reason"] = headerSafe(decision.reason).slice(0, 120);
   if (decision.mode === "forced" || decision.mode === "direct" || decision.mode === "hint") {
     headers["x-jev-gateway-tool"] = decision.tool;
   }

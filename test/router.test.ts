@@ -185,6 +185,24 @@ describe("POST /v1/chat/completions", () => {
     expect(upstream.calls).toHaveLength(1);
   });
 
+  // A block page from a proxy in front of Jev (Cloudflare answers 403 with HTML) put newlines into
+  // the reason header, and Headers.set threw after the upstream had already been called.
+  it.each([
+    ["an HTML error page", '403 from TypeSafe: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->'],
+    ["characters a header cannot carry", "503 from TypeSafe: overloaded \u2014 try again"],
+  ])("fails open when a Jev error carries %s", async (_, message) => {
+    const upstream = fakeUpstream();
+    const app = createApp({
+      config: testConfig(),
+      askJev: async () => Promise.reject(new Error(message)),
+      fetch: upstream.fetchImpl,
+    });
+    const res = await app.request("/v1/chat/completions", { method: "POST", body: JSON.stringify(chat("hi")) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-jev-gateway-reason")).toMatch(/^jev_error: [\x20-\x7e]+$/);
+    expect(upstream.calls).toHaveLength(1);
+  });
+
   it.each([
     ["there are no tools", { model: "m", messages: [{ role: "user", content: "hi" }] }, {}],
     ["the caller already chose a tool", chat("hi", { tool_choice: "none" }), {}],
