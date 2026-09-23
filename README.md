@@ -5,9 +5,9 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex**, **Claude Code** and **OpenCode** out of the box, including on ChatGPT and
-claude.ai subscriptions, with Gemini API clients, and with any client that speaks the OpenAI,
-Anthropic or Google Gemini APIs.
+It works with **Codex**, **Claude Code**, **OpenCode** and **Kilo** out of the box, including on
+ChatGPT and claude.ai subscriptions, with Gemini API clients, and with any client that speaks the
+OpenAI, Anthropic or Google Gemini APIs.
 
 > Independent project, not affiliated with or endorsed by TypeSafe. "Jev" is TypeSafe's model and
 > this gateway is a client of its public API.
@@ -15,8 +15,8 @@ Anthropic or Google Gemini APIs.
 ## Quick start
 
 You need Node.js 22.15 or newer, a key for Jev (from TypeSafe, OpenRouter or Vercel AI Gateway, see
-[Where Jev runs](#where-jev-runs)), and Codex, Claude Code, and/or OpenCode already installed and
-logged in.
+[Where Jev runs](#where-jev-runs)), and Codex, Claude Code, OpenCode and/or Kilo already installed
+and logged in.
 
 **1. Install**
 
@@ -30,6 +30,7 @@ npm install -g jev-gateway
 jev-codex      # use it exactly like `codex`
 jev-claude     # use it exactly like `claude`
 jev-opencode   # use it exactly like `opencode` (stable v1)
+jev-kilo       # use it exactly like `kilo` (Kilo CLI)
 jev-gemini     # Gemini CLI, with a Gemini API key
 ```
 
@@ -55,14 +56,15 @@ The key works (Jev answered in 712 ms).
 jev-codex --dashboard
 ```
 
-That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`, or
-`~/.config/opencode` is changed, and plain `codex`, `claude`, and `opencode` still behave as
-before. Only sessions started with the `jev-` commands go through the gateway.
+That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`,
+`~/.config/opencode`, or `~/.config/kilo` is changed, and plain `codex`, `claude`, `opencode`,
+and `kilo` still behave as before. Only sessions started with the `jev-` commands go through the
+gateway.
 
 ## What to expect
 
-- The first `jev-codex`, `jev-claude`, or `jev-opencode` starts a small gateway in the background
-  and then opens your agent. Every argument is passed through, so `jev-codex exec "fix the
+- The first `jev-codex`, `jev-claude`, `jev-opencode`, or `jev-kilo` starts a small gateway in the
+  background and then opens your agent. Every argument is passed through, so `jev-codex exec "fix the
   failing test"` works like `codex exec "fix the failing test"`.
 - The gateway keeps running after you close the agent, so the next session starts instantly. Stop it
   with `--stop`.
@@ -74,7 +76,7 @@ before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini`.
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo` and `jev-gemini`.
 
 | Command | What it does |
 | --- | --- |
@@ -90,18 +92,19 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791 and Gemini clients 8788. Change them with
-`JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT` and `JEV_GEMINI_PORT`.
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Kilo 8792 and Gemini clients 8788. Change
+them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`, `JEV_KILO_PORT` and
+`JEV_GEMINI_PORT`.
 
 ## Dashboard
 
 ```bash
-jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard
+jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard, jev-kilo --dashboard
 ```
 
 This opens `http://localhost:8790/dashboard`. If no browser window appears, paste that address into
-your browser. One page shows each gateway (Codex, Claude, and OpenCode) and refreshes every
-2 seconds.
+your browser. One page shows each gateway (Codex, Claude, OpenCode, and Kilo) and refreshes
+every 2 seconds.
 
 You will see:
 
@@ -309,6 +312,45 @@ with fixed choices rather than everyday file and shell tools.
 The launcher sets `OPENCODE_EXPERIMENTAL_NATIVE_LLM=false` and
 `OPENCODE_EXPERIMENTAL_CODE_MODE=false` for the launched process only. Those experimental modes
 are outside the supported path; the stable AI SDK provider above is the supported one.
+
+## Using it with Kilo
+
+Tested with Kilo CLI 7.0.29.
+
+```bash
+jev-kilo   # use it exactly like `kilo`
+```
+
+Kilo CLI is built on OpenCode, so `jev-kilo` works the way `jev-opencode` does: it starts the
+gateway on `http://127.0.0.1:8792` if needed, then runs `kilo` with a `jev-gateway` custom provider
+injected through `KILO_CONFIG_CONTENT`. Nothing in `~/.config/kilo` is written, and every `kilo`
+flag (including `-m`) forwards untouched. Kilo speaks `POST /v1/chat/completions` to the gateway,
+with the same function tools OpenCode sends.
+
+The gateway forwards to the Kilo Gateway (`https://api.kilo.ai/api/openrouter`), the backend of
+Kilo's own `kilo` provider. That provider cannot be pointed at the gateway itself: it appends
+`/openrouter/` to any base URL, so its requests would miss the routed endpoint. The launcher adds a
+separate provider instead, so your Kilo sign-in (`kilo auth`) is not reused by it.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `KILO_API_KEY` | unset | Your Kilo key, forwarded untouched to the Kilo Gateway. Unset, Kilo sends no credential and the Kilo Gateway serves you anonymously, with free models |
+| `JEV_KILO_MODEL` | `kilo-auto/free` | Model selected as `jev-gateway/<model>`, in the Kilo Gateway's naming (`anthropic/claude-sonnet-4`, ...) |
+| `JEV_KILO_UPSTREAM_BASE_URL` | `https://api.kilo.ai/api/openrouter` | Where the gateway forwards Kilo traffic. Any OpenAI-compatible endpoint works; `KILO_API_KEY` is then the key sent to it |
+| `JEV_KILO_PORT` | `8792` | Router port for Kilo |
+
+**Whether `forced` helps depends on the model behind it.** The free models tried did not reliably
+follow a forced `tool_choice`: `kilo-auto/free` routed to a model that ignored it, and
+`nvidia/nemotron-3-super-120b-a12b:free` honoured it in a direct call but not in a Kilo session.
+An ignored choice does no harm (the turn goes on as it would without the gateway), but it saves
+nothing either. Choose a model that honours `tool_choice` with `JEV_KILO_MODEL`, and check the
+dashboard.
+
+`jev-kilo --print-config` prints the same provider as a `kilo.jsonc` snippet, to point plain `kilo`
+at a gateway kept running with `jev-kilo --start`.
+
+Run end to end with a real Kilo CLI and the real Kilo Gateway, with `scripts/mock-jev.mjs` in
+place of Jev. Not yet run with a real Jev key.
 
 ## Using it with Gemini
 

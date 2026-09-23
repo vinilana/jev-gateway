@@ -41,7 +41,7 @@ or another provider's: see [Where Jev runs](README.md#where-jev-runs)).
 [`POST /router/decide`](README.md#try-a-decision-without-calling-any-llm) shows what Jev decides
 for a request without calling any LLM.
 
-**Through a launcher.** `pnpm codex`, `pnpm claude`, `pnpm opencode` and `pnpm gemini` run the
+**Through a launcher.** `pnpm codex`, `pnpm claude`, `pnpm opencode`, `pnpm kilo` and `pnpm gemini` run the
 launchers in `bin/`. In a checkout they start the gateway from the TypeScript sources, so there
 is no build step. With no key for Jev configured, the first run asks for one, exactly as an
 installed launcher does. The gateway keeps running in the background between sessions, which
@@ -115,7 +115,7 @@ otherwise.
   row field by field instead of passing log entries to the browser.
 - **The client's own configuration is never written.** Launchers point a client at the gateway
   through arguments and environment variables for that one process. Nothing in `~/.codex`,
-  `~/.claude` or `~/.config/opencode` is modified.
+  `~/.claude`, `~/.config/opencode` or `~/.config/kilo` is modified.
 - **Prompt caches survive.** Where rewriting a request would invalidate a cached prefix, the
   gateway adds a hint after the client's last block instead (`hint` mode).
 - **Few dependencies.** The published package has a handful. A new one needs a reason a few lines of
