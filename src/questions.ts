@@ -136,7 +136,10 @@ export function buildQuestions(
         "Does the assistant need to call one of its tools now, rather than reply to the user in plain text?",
     },
   };
-  if (!options.withArgs) return { questions, plans };
+  if (!options.withArgs) {
+    for (const plan of plans) delete plan.closedParams;
+    return { questions, plans };
+  }
 
   let argQuestions = 0;
   plans.forEach((plan, toolIndex) => {
