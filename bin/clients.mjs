@@ -1,5 +1,4 @@
 // How each coding agent is pointed at a gateway. Shared by the launchers and the benchmark runner,
-// so a benchmark drives an agent exactly the way the `jev-<client>` launchers do.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -141,25 +140,14 @@ export const opencode = {
   },
 };
 
-/** Where Kilo traffic goes by default: the OpenAI-compatible Kilo Gateway, the backend of Kilo's own provider. */
 function kiloUpstream() {
   return process.env.JEV_KILO_UPSTREAM_BASE_URL ?? "https://api.kilo.ai/api/openrouter";
 }
 
-/** Model id selected as `jev-gateway/<model>`; override with JEV_KILO_MODEL. */
 function kiloModel() {
   return process.env.JEV_KILO_MODEL ?? "kilo-auto/free";
 }
 
-/**
- * Kilo CLI is built on OpenCode and reads the same config shape, under its own variable:
- * KILO_CONFIG_CONTENT merges over the user's files, which are never written. The built-in `kilo`
- * provider cannot be pointed at the gateway: it appends `/openrouter/` to any base URL without it,
- * so its requests would land outside `/v1/chat/completions`. A custom `@ai-sdk/openai-compatible`
- * provider speaks that route instead. `{env:KILO_API_KEY}` is the user's Kilo key, forwarded
- * untouched; left unset it resolves to empty, which the Kilo Gateway serves as an anonymous user
- * limited to free models.
- */
 function kiloInlineConfig(origin) {
   const model = kiloModel();
   return {
@@ -187,7 +175,6 @@ export const kilo = {
     "JEV_KILO_UPSTREAM_BASE_URL   where Kilo traffic goes (default https://api.kilo.ai/api/openrouter)\n" +
     "JEV_KILO_MODEL               model selected as jev-gateway/<model> (default kilo-auto/free)\n" +
     "KILO_API_KEY                 your Kilo key, forwarded untouched; unset means free models only",
-  // No `args`, as for OpenCode: a user `-m provider/model` keeps its priority over the injected default.
   env: (origin) => ({ KILO_CONFIG_CONTENT: JSON.stringify(kiloInlineConfig(origin)) }),
   configHelp: (origin) => {
     const config = kiloInlineConfig(origin);

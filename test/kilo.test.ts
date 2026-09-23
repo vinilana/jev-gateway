@@ -6,23 +6,9 @@ import { createApp } from "../src/app.js";
 import { NO_TOOL } from "../src/questions.js";
 import { fakeJev, fakeUpstream, testConfig } from "./helpers.js";
 
-// @ts-ignore: bin/ is plain JavaScript outside the tsconfig include; resolved at runtime.
-const clients = await import("../bin/clients.mjs");
+const clientsModule: string = "../bin/clients.mjs";
+const clients = await import(clientsModule);
 
-/**
- * Kilo CLI 7.0.29 wire compatibility.
- *
- * Fixture provenance (local capture, no credentials): a capture server on 127.0.0.1 stood in for
- * the upstream, with the provider from `kilo.env("<capture origin>")` injected through
- * KILO_CONFIG_CONTENT, then `kilo run "list the files here"`. Observed `POST /v1/chat/completions`
- * with `model/max_tokens/messages/tools/tool_choice/stream/stream_options`, 11 `type: "function"`
- * tools (question, bash, read, glob, grep, edit, write, task, webfetch, todowrite, skill),
- * `tool_choice: "auto"`, `stream: true`. With a `gpt-*` model id Kilo also sends
- * `reasoning_effort` and a non-standard top-level `reasoningSummary`. With KILO_API_KEY unset no
- * `authorization` header is sent at all. A title request in the same run carries no tools.
- * Parameter shapes below are the captured ones, descriptions trimmed; the system prompt is a
- * short stand-in for Kilo's.
- */
 
 const globTool = {
   type: "function",
@@ -123,7 +109,6 @@ describe("kilo chat completions (@ai-sdk/openai-compatible)", () => {
   });
 
   it("forwards no credential when Kilo sent none, and the user's key untouched when it did", async () => {
-    // An anonymous Kilo session must reach the Kilo Gateway anonymously, not with some other key.
     const anonymous = setup({ tool: { choice: "glob" }, needs_tool: { noul: 0.9 } });
     await anonymous.post(kiloRequest());
     expect(anonymous.upstream.calls[0]!.headers.get("authorization")).toBeNull();
