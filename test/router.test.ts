@@ -64,6 +64,15 @@ describe("chatAdapter.toInput + buildState", () => {
 });
 
 describe("POST /v1/chat/completions", () => {
+  it("never answers directly with JEV_DIRECT_CALLS=false, not even for a tool that takes no arguments", async () => {
+    const ping = { type: "function", function: { name: "ping", description: "Check the service is up.", parameters: { type: "object", properties: {} } } };
+    const { post, upstream } = setup({ tool: { choice: "ping" }, needs_tool: { noul: 0.95 } }, testConfig({ directCalls: false }));
+    const res = await post(chat("is the service up?", { tools: [ping] }));
+
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("forced");
+    expect(upstream.calls).toHaveLength(1);
+  });
+
   it("answers directly, without the LLM, when Jev can fill every argument", async () => {
     const { post, upstream } = setup(lightsAnswers);
     const res = await post(chat("turn on the kitchen lights"));
