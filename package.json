@@ -34,7 +34,9 @@
     "jev-codex": "bin/jev-codex.mjs",
     "jev-claude": "bin/jev-claude.mjs",
     "jev-opencode": "bin/jev-opencode.mjs",
-    "jev-gemini": "bin/jev-gemini.mjs"
+    "jev-gemini": "bin/jev-gemini.mjs",
+    "jev-antigravity": "bin/jev-antigravity.mjs",
+    "jev-agy": "bin/jev-agy.mjs"
   },
   "files": [
     "dist",
@@ -53,7 +55,9 @@
     "claude": "node bin/jev-claude.mjs",
     "opencode": "node bin/jev-opencode.mjs",
     "gemini": "node bin/jev-gemini.mjs",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
+    "antigravity": "node bin/jev-antigravity.mjs",
+    "agy": "node bin/jev-agy.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

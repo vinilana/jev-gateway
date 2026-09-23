@@ -225,4 +225,208 @@ describe("POST /v1beta/models/...:generateContent", () => {
     const body = `data: ${JSON.stringify({ candidates: [], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, cachedContentTokenCount: 64 } })}\n\n`;
     expect(await readUsage(new Response(body))).toMatchObject({ input: 100, output: 20, cached: 64 });
   });
+
+  describe("Cloud Code and internal /v1internal routing", () => {
+    const wrappedInternalRequest = (extra: Record<string, unknown> = {}) => ({
+      project: "projects/test-project/locations/global",
+      model: "gemini-3.8-flash-high",
+      requestId: "req-123",
+      request: geminiRequest(extra),
+    });
+
+    it("filters out thinking blocks (thought: true) from conversation turns", async () => {
+      const { post, jev } = setup(shellDecision);
+      const reqWithThought = wrappedInternalRequest({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "what does main.py do?" }],
+          },
+          {
+            role: "model",
+            parts: [
+              { text: "Thinking about the files in the directory...", thought: true },
+              {
+                functionCall: {
+                  name: "shell",
+                  args: { command: "ls" },
+                },
+              },
+            ],
+          },
+          {
+            role: "user",
+            parts: [
+              {
+                functionResponse: {
+                  name: "shell",
+                  response: { output: "main.py\nREADME.md" },
+                },
+              },
+            ],
+          },
+        ],
+      });
+      await post(reqWithThought, "/v1internal:streamGenerateContent");
+
+      const { state } = jev.requests[0]!;
+      expect((state as Record<string, unknown>).conversation).toEqual([
+        { role: "user", text: "what does main.py do?" },
+        { role: "assistant", tool_calls: [{ tool: "shell", arguments: '{"command":"ls"}' }] },
+        { role: "tool_result", tool: "shell", content: "{\"output\":\"main.py\\nREADME.md\"}" },
+      ]);
+    });
+
+    it("records model from top-level or wrapped request in dashboard events", async () => {
+      const { post, app } = setup(shellDecision);
+      await post(wrappedInternalRequest(), "/v1internal:streamGenerateContent");
+      await settled();
+
+      const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string }[] };
+      expect(feed.events[0]?.model).toBe("gemini-3.8-flash-high");
+    });
+
+    it("translates Cloud Code internal wrapped request into Jev turns and tool declarations", async () => {
+      const { post, jev } = setup(shellDecision);
+      await post(wrappedInternalRequest(), "/v1internal:generateContent");
+
+      const { state } = jev.requests[0]!;
+      expect(state).toEqual({
+        assistant_instructions: "You are a helpful coding assistant.",
+        conversation: [
+          { role: "user", text: "what does main.py do?" },
+          { role: "assistant", tool_calls: [{ tool: "shell", arguments: '{"command":"ls"}' }] },
+        { role: "tool_result", tool: "shell", content: '{"output":"main.py\\nREADME.md"}' },
+        ],
+      });
+    });
+
+    it("forces tool selection in wrapped request.toolConfig", async () => {
+      const { post, upstream } = setup(shellDecision);
+      await post(wrappedInternalRequest(), "/v1internal:streamGenerateContent");
+
+      expect(upstream.calls).toHaveLength(1);
+      const sent = upstream.calls[0]!.body as {
+        request?: { toolConfig?: { functionCallingConfig?: { mode: string; allowedFunctionNames?: string[] } } };
+      };
+      expect(sent.request?.toolConfig?.functionCallingConfig).toEqual({
+        mode: "ANY",
+        allowedFunctionNames: ["shell"],
+      });
+    });
+
+    it("returns direct answers wrapped in response object for internal requests", async () => {
+      const { post, upstream } = setup({
+        tool: { choice: "set_lights" },
+        needs_tool: { noul: 0.95 },
+        "arg:0:room": { choice: "bedroom" },
+        "arg:0:on": { noul: 0.99 },
+      });
+      const response = await post(
+        wrappedInternalRequest({
+          tools: [
+            {
+              functionDeclarations: [
+                {
+                  name: "set_lights",
+                  description: "Turn lights on or off",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      room: { type: "string", enum: ["kitchen", "bedroom"] },
+                      on: { type: "boolean" },
+                    },
+                    required: ["room", "on"],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        "/v1internal:generateContent",
+      );
+
+      expect(upstream.calls).toHaveLength(0);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        response: {
+          candidates: Array<{ content: { parts: Array<{ functionCall?: { name: string; args: unknown } }> } }>;
+        };
+      };
+      expect(body.response.candidates[0]!.content.parts[0]!.functionCall).toEqual({
+        name: "set_lights",
+        args: { room: "bedroom", on: true },
+      });
+    });
+
+    it("streams direct answers as SSE on /v1internal:streamGenerateContent", async () => {
+      const { post, upstream } = setup({
+        tool: { choice: "set_lights" },
+        needs_tool: { noul: 0.95 },
+        "arg:0:room": { choice: "bedroom" },
+        "arg:0:on": { noul: 0.99 },
+      });
+      const response = await post(
+        wrappedInternalRequest({
+          tools: [
+            {
+              functionDeclarations: [
+                {
+                  name: "set_lights",
+                  description: "Turn lights on or off",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      room: { type: "string", enum: ["kitchen", "bedroom"] },
+                      on: { type: "boolean" },
+                    },
+                    required: ["room", "on"],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        "/v1internal:streamGenerateContent",
+      );
+      expect(upstream.calls).toHaveLength(0);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const text = await response.text();
+      const chunk = JSON.parse(text.replace(/^data: /, "").trim());
+      expect(chunk.response.candidates[0].content.parts[0].functionCall.name).toBe("set_lights");
+    });
+
+    it("proxies /v1internal management and model requests untouched", async () => {
+      const jev = fakeJev(shellDecision);
+      const upstream = fakeUpstream();
+      const app = createApp({
+        config: testConfig({ upstreamBaseUrl: "https://daily-cloudcode-pa.googleapis.com" }),
+        askJev: jev.askJev,
+        fetch: upstream.fetchImpl,
+      });
+
+      await app.request("/v1internal:loadCodeAssist", { method: "POST", body: JSON.stringify({ project: "proj-1" }) });
+      await app.request("/v1internal:fetchAvailableModels", { method: "POST", body: "{}" });
+
+      expect(upstream.calls.map((c) => c.url)).toEqual([
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      ]);
+    });
+
+    it("auto-detects wrapped internal request in /router/decide", async () => {
+      const { app } = setup(shellDecision);
+      const res = await app.request("/router/decide", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(wrappedInternalRequest()),
+      });
+
+      expect(res.status).toBe(200);
+      const decision = (await res.json()) as { mode: string; tool?: string };
+      expect(decision.mode).toBe("forced");
+      expect(decision.tool).toBe("shell");
+    });
+  });
 });

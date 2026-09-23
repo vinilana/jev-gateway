@@ -21,11 +21,14 @@ interface LauncherSpec {
 const opencode = clients.opencode as LauncherSpec;
 const codex = clients.codex as LauncherSpec;
 const claude = clients.claude as LauncherSpec;
+const antigravity = clients.antigravity as LauncherSpec;
+const agy = clients.agy as LauncherSpec;
+const agyLauncherBin = fileURLToPath(new URL("../bin/jev-antigravity.mjs", import.meta.url));
 
 const origin = "http://127.0.0.1:8791";
 const launcherBin = fileURLToPath(new URL("../bin/jev-opencode.mjs", import.meta.url));
 
-const managedEnv = ["JEV_OPENCODE_UPSTREAM_BASE_URL", "JEV_OPENCODE_MODEL", "JEV_CODEX_UPSTREAM_BASE_URL", "JEV_CLAUDE_UPSTREAM_BASE_URL", "CODEX_HOME"] as const;
+const managedEnv = ["JEV_OPENCODE_UPSTREAM_BASE_URL", "JEV_OPENCODE_MODEL", "JEV_CODEX_UPSTREAM_BASE_URL", "JEV_CLAUDE_UPSTREAM_BASE_URL", "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL", "CODEX_HOME", "GEMINI_API_KEY"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -169,5 +172,66 @@ describe("existing launchers", () => {
     expect(claude.defaultPort).toBe(8789);
     expect(claude.upstream()).toBe("https://api.anthropic.com/v1");
     expect(claude.env!(origin)).toEqual({ ANTHROPIC_BASE_URL: origin });
+  });
+});
+
+describe("jev-antigravity spec", () => {
+  it("identifies itself as the antigravity launcher on its own port", () => {
+    expect(antigravity.name).toBe("jev-antigravity");
+    expect(antigravity.client).toBe("agy");
+    expect(antigravity.portEnv).toBe("JEV_ANTIGRAVITY_PORT");
+    expect(antigravity.defaultPort).toBe(8787);
+    expect([codex.defaultPort, claude.defaultPort, opencode.defaultPort, (clients.gemini as LauncherSpec).defaultPort]).not.toContain(antigravity.defaultPort);
+    expect(agy).toBe(antigravity);
+  });
+
+  it("defaults upstream to Cloud Code with a JEV_ANTIGRAVITY_UPSTREAM_BASE_URL override", () => {
+    expect(antigravity.upstream()).toBe("https://daily-cloudcode-pa.googleapis.com");
+    process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL = "https://custom-cloudcode.test";
+    expect(antigravity.upstream()).toBe("https://custom-cloudcode.test");
+    expect(antigravity.upstreamHelp).toContain("JEV_ANTIGRAVITY_UPSTREAM_BASE_URL");
+  });
+
+  it("defaults upstream to Gemini when GEMINI_API_KEY is set in environment", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    expect(antigravity.upstream()).toBe("https://generativelanguage.googleapis.com");
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it("points CLOUD_CODE_URL, GOOGLE_GEMINI_BASE_URL, and GEMINI_API_BASE at the gateway", () => {
+    const env = antigravity.env!("http://127.0.0.1:8787");
+    expect(env).toEqual({
+      CLOUD_CODE_URL: "http://127.0.0.1:8787",
+      GOOGLE_GEMINI_BASE_URL: "http://127.0.0.1:8787",
+      GEMINI_API_BASE: "http://127.0.0.1:8787",
+    });
+  });
+
+  it("prints permanent wiring help for both plan mode and Gemini key", () => {
+    const help = antigravity.configHelp("http://127.0.0.1:8787");
+    expect(help).toContain("CLOUD_CODE_URL=http://127.0.0.1:8787 agy");
+    expect(help).toContain("--mode plan");
+    expect(help).toContain("GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787 agy");
+  });
+});
+
+describe("jev-antigravity entrypoint", () => {
+  it("is registered in package.json with runnable scripts", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as any;
+    expect(pkg.bin["jev-antigravity"]).toBe("bin/jev-antigravity.mjs");
+    expect(pkg.bin["jev-agy"]).toBe("bin/jev-agy.mjs");
+    expect(pkg.scripts.antigravity).toBe("node bin/jev-antigravity.mjs");
+    expect(pkg.scripts.agy).toBe("node bin/jev-agy.mjs");
+  });
+
+  it("--gateway-help describes the antigravity launcher without starting anything", () => {
+    const out = execFileSync(process.execPath, [agyLauncherBin, "--gateway-help"], { encoding: "utf8", timeout: 30_000 });
+    expect(out).toContain("jev-antigravity: agy with tool selection routed through Jev");
+    expect(out).toContain("--print-config");
+  });
+
+  it("--print-config prints the antigravity environment configuration without starting anything", () => {
+    const out = execFileSync(process.execPath, [agyLauncherBin, "--print-config"], { encoding: "utf8", timeout: 30_000 });
+    expect(out).toContain("CLOUD_CODE_URL=http://127.0.0.1:8787 agy");
   });
 });
