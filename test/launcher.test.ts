@@ -14,8 +14,22 @@ interface LauncherSpec {
   upstream: () => string;
   upstreamHelp: string;
   args?: (origin: string) => string[];
-  env?: (origin: string) => Record<string, string>;
-  configHelp: (origin: string) => string;
+  env?: (origin: string, environment?: Record<string, string | undefined>, auth?: Record<string, OpenCodeAuthEntry>) => Record<string, string>;
+  setupAppPreflight?: () => unknown;
+  configHelp: (origin: string, environment?: Record<string, string | undefined>, auth?: Record<string, OpenCodeAuthEntry>) => string;
+}
+
+interface OpenCodeAuthEntry {
+  type: "api" | "oauth";
+  key?: string;
+}
+
+interface OpenCodeRoute {
+  providerId: string;
+  modelId: string;
+  model: string;
+  upstream: string;
+  credentialSource: string;
 }
 
 const opencode = clients.opencode as LauncherSpec;
@@ -25,7 +39,7 @@ const claude = clients.claude as LauncherSpec;
 const origin = "http://127.0.0.1:8791";
 const launcherBin = fileURLToPath(new URL("../bin/jev-opencode.mjs", import.meta.url));
 
-const managedEnv = ["JEV_OPENCODE_UPSTREAM_BASE_URL", "JEV_OPENCODE_MODEL", "JEV_CODEX_UPSTREAM_BASE_URL", "JEV_CLAUDE_UPSTREAM_BASE_URL", "CODEX_HOME"] as const;
+const managedEnv = ["JEV_OPENCODE_UPSTREAM_BASE_URL", "JEV_OPENCODE_MODEL", "JEV_CODEX_UPSTREAM_BASE_URL", "JEV_CLAUDE_UPSTREAM_BASE_URL", "CODEX_HOME", "OPENAI_API_KEY"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -33,6 +47,7 @@ beforeEach(() => {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  process.env.OPENAI_API_KEY = "test-only-key";
 });
 
 afterEach(() => {
@@ -43,8 +58,12 @@ afterEach(() => {
   }
 });
 
-const inlineConfig = (originOverride = origin) => {
-  const env = opencode.env?.(originOverride);
+const inlineConfig = (
+  originOverride = origin,
+  environment: Record<string, string | undefined> = { ...process.env, OPENAI_API_KEY: "test-only-key" },
+  auth: Record<string, OpenCodeAuthEntry> = {},
+) => {
+  const env = opencode.env?.(originOverride, environment, auth);
   expect(env).toBeDefined();
   return JSON.parse(env!.OPENCODE_CONFIG_CONTENT as string) as any;
 };
@@ -56,6 +75,7 @@ describe("jev-opencode spec", () => {
     expect(opencode.client).toBe("opencode");
     expect(opencode.portEnv).toBe("JEV_OPENCODE_PORT");
     expect(opencode.defaultPort).toBe(8791);
+    expect(opencode.setupAppPreflight).toBeTypeOf("function");
     expect([codex.defaultPort, claude.defaultPort]).not.toContain(opencode.defaultPort);
   });
 
@@ -64,6 +84,37 @@ describe("jev-opencode spec", () => {
     process.env.JEV_OPENCODE_UPSTREAM_BASE_URL = "https://llm.test/v1";
     expect(opencode.upstream()).toBe("https://llm.test/v1");
     expect(opencode.upstreamHelp).toContain("JEV_OPENCODE_UPSTREAM_BASE_URL");
+  });
+
+  it("uses a saved OpenRouter credential without exposing or copying its key", () => {
+    const resolve = (clients as unknown as { resolveOpenCodeRoute?: (input: { env: Record<string, string | undefined>; auth: Record<string, OpenCodeAuthEntry> }) => OpenCodeRoute }).resolveOpenCodeRoute;
+    expect(resolve).toBeTypeOf("function");
+    if (!resolve) return;
+
+    const route = resolve({
+      env: {},
+      auth: {
+        openai: { type: "oauth" },
+        openrouter: { type: "api", key: "test-only-secret" },
+      },
+    });
+
+    expect(route).toMatchObject({
+      providerId: "openrouter",
+      modelId: "openai/gpt-5",
+      model: "openrouter/openai/gpt-5",
+      upstream: "https://openrouter.ai/api/v1",
+      credentialSource: "opencode-auth-store",
+    });
+    expect(JSON.stringify(route)).not.toContain("test-only-secret");
+  });
+
+  it("configures the built-in OpenRouter provider to use the gateway without embedding the saved key", () => {
+    const config = inlineConfig(origin, {}, { openrouter: { type: "api", key: "test-only-secret" } });
+    expect(config.model).toBe("openrouter/openai/gpt-5");
+    expect(config.small_model).toBe("openrouter/openai/gpt-5");
+    expect(config.provider.openrouter.options).toEqual({ baseURL: `${origin}/v1` });
+    expect(JSON.stringify(config)).not.toContain("test-only-secret");
   });
 
   it("selects jev-gateway/<model> by default with a JEV_OPENCODE_MODEL override", () => {
@@ -91,7 +142,7 @@ describe("jev-opencode spec", () => {
   });
 
   it("keeps the experimental native LLM and code modes disabled for the launched process", () => {
-    const env = opencode.env!(origin);
+    const env = opencode.env!(origin, { OPENAI_API_KEY: "test-only-key" }, {});
     expect(env.OPENCODE_EXPERIMENTAL_NATIVE_LLM).toBe("false");
     expect(env.OPENCODE_EXPERIMENTAL_CODE_MODE).toBe("false");
   });
@@ -104,7 +155,7 @@ describe("jev-opencode spec", () => {
   });
 
   it("prints permanent wiring help rooted at the gateway", () => {
-    const help = opencode.configHelp(origin);
+    const help = opencode.configHelp(origin, { ...process.env, OPENAI_API_KEY: "test-only-key" }, {});
     expect(help).toContain(`${origin}/v1`);
     expect(help).toContain("jev-gateway/gpt-5");
     expect(help).toContain("opencode.json");
@@ -118,7 +169,7 @@ describe("jev-opencode spec", () => {
     // No raw-JSON shell one-liner: single-quoting breaks on apostrophes in custom model IDs.
     expect(help).not.toContain("OPENCODE_CONFIG_CONTENT='");
     process.env.JEV_OPENCODE_MODEL = "other-model";
-    expect(opencode.configHelp(origin)).toContain("jev-gateway/other-model");
+    expect(opencode.configHelp(origin, { ...process.env, OPENAI_API_KEY: "test-only-key" }, {})).toContain("jev-gateway/other-model");
   });
 
   it("stays safe when a custom model ID contains an apostrophe", () => {
@@ -126,7 +177,7 @@ describe("jev-opencode spec", () => {
     const config = inlineConfig();
     expect(config.model).toBe("jev-gateway/o'brien");
     expect(Object.keys(config.provider["jev-gateway"].models)).toEqual(["o'brien"]);
-    const help = opencode.configHelp(origin);
+    const help = opencode.configHelp(origin, { ...process.env, OPENAI_API_KEY: "test-only-key" }, {});
     expect(help).not.toContain("OPENCODE_CONFIG_CONTENT='");
     const jsonBlock = help.slice(help.indexOf("{"), help.lastIndexOf("}") + 1);
     expect(() => JSON.parse(jsonBlock)).not.toThrow();

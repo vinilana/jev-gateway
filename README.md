@@ -55,9 +55,10 @@ The key works (Jev answered in 712 ms).
 jev-codex --dashboard
 ```
 
-That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`, or
-`~/.config/opencode` is changed, and plain `codex`, `claude`, and `opencode` still behave as
-before. Only sessions started with the `jev-` commands go through the gateway.
+Your existing login remains in use. By default, the launchers do not change client config files.
+By default, only sessions started with the `jev-` commands go through the gateway. Running
+`jev-codex --setup-app` or `jev-opencode --setup-app` opts the matching desktop app and its shared
+default CLI configuration into the gateway as well.
 
 ## What to expect
 
@@ -74,7 +75,7 @@ before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini`.
+Most commands work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini`; `--setup-app` is available for Codex and OpenCode.
 
 | Command | What it does |
 | --- | --- |
@@ -87,6 +88,8 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini
 | `jev-codex --start` | Start the gateway without opening the agent |
 | `jev-codex --stop` | Stop the background gateway (close your sessions first) |
 | `jev-codex --setup` | Choose where to reach Jev again, or change the key |
+| `jev-codex --setup-app` | Configure the Codex desktop app, start the gateway, and restart the app |
+| `jev-opencode --setup-app` | Configure OpenCode Desktop, start the gateway, and restart the app |
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
@@ -166,6 +169,26 @@ The first-run key check will tell you at once if one of them disagrees.
 `https://chatgpt.com/backend-api/codex`. With an API key it forwards to `https://api.openai.com/v1`.
 Override either with `JEV_CODEX_UPSTREAM_BASE_URL`.
 
+### Codex desktop app
+
+Run this command to configure the Codex desktop app in one step:
+
+```bash
+jev-codex --setup-app
+```
+
+The command starts the gateway, merges its provider settings into `~/.codex/config.toml`, creates a
+one-time backup of an existing config at `~/.jev-gateway/codex-config.before-app-setup.toml`, and opens
+or gracefully restarts the desktop app on Windows and macOS. If the app does not close cleanly, the
+command leaves it running and tells you to restart it manually. On Linux, the config and gateway are
+set up automatically, but the app must be restarted manually.
+
+The user-level provider setting is shared, so the default `codex` CLI also uses the gateway while
+it is active. `jev-codex` continues to configure its own CLI process directly. The app reuses its
+existing Codex login; the gateway does not need your OpenAI or ChatGPT credentials separately.
+
+`jev-codex --print-config` remains available for manual setup.
+
 Codex speaks the Responses API, so the gateway handles `POST /v1/responses`, including Codex's
 free-form tools such as `apply_patch`, tools declared inside the conversation, and compressed
 request bodies. If the backend rejects a rewritten request, the gateway resends the original, so
@@ -194,16 +217,40 @@ jev-opencode   # use it exactly like `opencode`
 ```
 
 That starts the gateway on `http://127.0.0.1:8791` if needed, then runs `opencode` through it
-with a `jev-gateway` custom provider injected via `OPENCODE_CONFIG_CONTENT`. Your
-`~/.config/opencode` files are never written, and every `opencode` flag (including `-m`) forwards
-untouched. The launcher uses stable `@ai-sdk/openai-compatible`, so OpenCode speaks
+with a `jev-gateway` custom provider injected via `OPENCODE_CONFIG_CONTENT`. The CLI launcher does
+not write your OpenCode config files, and every `opencode` flag (including `-m`) forwards untouched.
+The launcher uses stable `@ai-sdk/openai-compatible`, so OpenCode speaks
 `POST /v1/chat/completions` off `http://127.0.0.1:8791/v1` by default, an endpoint the gateway
 already routes.
+
+### OpenCode Desktop
+
+Run one command to configure OpenCode Desktop:
+
+```bash
+jev-opencode --setup-app
+```
+
+This starts or reuses the gateway, updates the global OpenCode config with the gateway provider and
+default model in `$XDG_CONFIG_HOME/opencode/opencode.json(c)` (by default,
+`~/.config/opencode/opencode.json(c)`), saves a one-time backup of an existing config in
+`~/.jev-gateway`, and restarts the desktop app automatically on Windows and macOS. On Linux, restart
+the app manually after setup. Existing settings and JSONC comments are preserved. Setup uses an
+OpenAI API key from `OPENAI_API_KEY` when available; otherwise it reuses a saved OpenAI API or
+OpenRouter API credential from OpenCode. It does not copy saved credentials into the config. OpenAI
+OAuth sign-in is not suitable for this route because OpenCode sends those requests directly to
+ChatGPT instead of honoring the gateway URL.
+
+OpenCode shares this global config between Desktop and the plain `opencode` CLI, so both use the
+gateway as their default after setup. The `jev-opencode` CLI launcher continues to work as before.
+Keep the gateway running while using the gateway model. A project-level OpenCode config can choose
+its own model and override the global default.
 
 Manage it like the other launchers:
 
 ```bash
 jev-opencode --gateway-help   # list launcher commands (`--help` stays opencode's own help)
+jev-opencode --setup-app      # configure OpenCode Desktop and its shared CLI default
 jev-opencode --print-config   # opencode.json snippet to point plain `opencode` at the gateway
 jev-opencode --start          # start the gateway without opening opencode
 jev-opencode --stop           # stop the background gateway
@@ -216,9 +263,10 @@ jev-opencode --dashboard      # open the monitoring dashboard in your browser
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | required | Authorizes the Jev tool-selection call only. Never sent as the LLM upstream credential |
-| `OPENAI_API_KEY` | your key | Your LLM credential. OpenCode resolves `{env:OPENAI_API_KEY}` and the gateway forwards it untouched to the LLM upstream |
-| `JEV_OPENCODE_UPSTREAM_BASE_URL` | `https://api.openai.com/v1` | Where the gateway forwards OpenCode traffic: your LLM provider, not the TypeSafe endpoint |
-| `JEV_OPENCODE_MODEL` | `gpt-5` | Model selected as `jev-gateway/<model>` |
+| `OPENAI_API_KEY` | unset | Optional OpenAI API credential. If set, it is used for OpenCode requests; otherwise setup can use a saved OpenAI API or OpenRouter API credential |
+| OpenCode saved API key | OpenAI or OpenRouter | Read by OpenCode from its own auth store; the gateway forwards the request's authorization header without copying the key into config |
+| `JEV_OPENCODE_UPSTREAM_BASE_URL` | follows the selected credential | Override where the gateway forwards OpenCode traffic |
+| `JEV_OPENCODE_MODEL` | `gpt-5` | Model selected under the provider with the supported saved API credential |
 | `JEV_OPENCODE_PORT` | `8791` | Router port for OpenCode |
 
 The gateway forwards the client's `Authorization` header to the LLM upstream. A launcher-spawned
@@ -232,10 +280,11 @@ Keep the gateway running, then point plain `opencode` at it with a file, so no s
 
 ```bash
 jev-opencode --start
-jev-opencode --print-config   # copy the opencode.json snippet it prints
+jev-opencode --print-config   # copy the provider snippet it prints for your saved credential
 ```
 
-Chat Completions (the launcher default, stable `@ai-sdk/openai-compatible`):
+For example, with `OPENAI_API_KEY` set, the launcher prints this custom-provider configuration
+(the stable `@ai-sdk/openai-compatible` Chat Completions route):
 
 ```json
 {
@@ -283,8 +332,10 @@ Responses (stable `@ai-sdk/openai` instead):
 }
 ```
 
-Save either block as `opencode.json` in the project root or `~/.config/opencode/opencode.json`,
-then select it with `opencode --model jev-gateway/gpt-5`.
+Save the printed block as `opencode.json` in the project root or
+`~/.config/opencode/opencode.json`, then select the model ID shown by `--print-config`. If setup
+uses a saved OpenRouter credential, the printed config selects OpenRouter's built-in provider and
+overrides its `baseURL` to the gateway; OpenCode reads the key from its auth store automatically.
 
 `baseURL` includes `/v1`; OpenCode and the AI SDK append the rest (`/chat/completions` for
 `@ai-sdk/openai-compatible`, `/responses` for `@ai-sdk/openai`). Both endpoints are routed by the

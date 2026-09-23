@@ -96,17 +96,17 @@ describe("validateKey", () => {
 });
 
 describe("saving and launching", () => {
-  it("writes the key to a file only its owner can read", () => {
+  it("writes and rotates the key, with owner-only POSIX permissions", () => {
     const file = join(mkdtempSync(join(tmpdir(), "jev-setup-")), "nested", ".env");
     saveEnv(file, { JEV_PROVIDER: "typesafe", TYPESAFE_API_KEY: "secret" });
     saveEnv(file, { TYPESAFE_API_KEY: "rotated" });
     expect(readFileSync(file, "utf8")).toBe("JEV_PROVIDER=typesafe\nTYPESAFE_API_KEY=rotated\n");
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it("without a terminal, a launcher names what is missing instead of hanging on a question", () => {
     const home = mkdtempSync(join(tmpdir(), "jev-home-"));
-    const env = { PATH: process.env.PATH, HOME: home, JEV_CODEX_PORT: "8999", JEV_SKIP_PROJECT_ENV: "1" };
+    const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, JEV_CODEX_PORT: "0", JEV_SKIP_PROJECT_ENV: "1" };
     let output = "";
     try {
       execFileSync(process.execPath, [join(ROOT, "bin/jev-codex.mjs"), "--start"], { env, cwd: home, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
