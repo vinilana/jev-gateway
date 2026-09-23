@@ -3,12 +3,6 @@ import { textOf, truncate } from "../state.js";
 import type { Json, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import type { Adapter } from "./adapter.js";
 
-/**
- * Kiro CLI's backend: `GenerateAssistantResponse` of the CodeWhisperer streaming service, an AWS
- * JSON 1.0 call posted to `/` with `x-amz-target`, answered as an AWS event stream. The API has no
- * `tool_choice`, so the gateway can only suggest Jev's pick (`hint`), never force it, and it cannot
- * answer in the client's place either.
- */
 
 interface KiroTool {
   toolSpecification?: { name: string; description?: string; inputSchema?: { json?: JsonSchema } };
@@ -41,22 +35,17 @@ export interface KiroRequest {
     currentMessage?: { userInputMessage?: UserInputMessage };
     [key: string]: unknown;
   };
-  /** Never on the wire: the model is `modelId` inside the message. Present to satisfy `Adapter`. */
   model?: string;
   stream?: boolean;
   [key: string]: unknown;
 }
 
-/** The `x-amz-target` of the one call the gateway routes; everything else Kiro sends is proxied. */
 export const KIRO_CHAT_TARGET = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse";
 
-// Kiro wraps what the user typed in markers, after context entries (time, steering files) that
-// would only crowd out the conversation in Jev's window.
 const USER_MESSAGE = /--- USER MESSAGE BEGIN ---\n?([\s\S]*?)--- USER MESSAGE END ---/;
 
 const userText = (content: string | undefined) => (content === undefined ? "" : (USER_MESSAGE.exec(content)?.[1] ?? content));
 
-/** A tool result's parts are `{ text }` or `{ json }`; `textOf` alone would reduce the latter to a placeholder. */
 const resultText = (content: unknown) =>
   Array.isArray(content)
     ? content
@@ -111,11 +100,6 @@ function toInput(req: KiroRequest, maxMessageChars: number): RouterInput | { ski
   };
 }
 
-/**
- * Suggest Jev's pick after everything Kiro wrote into the current message, so what it sent
- * before stays byte-identical. `decide` only lets a single inert token through as a tool name
- * (SAFE_TOOL_NAME), which is what makes writing it here safe.
- */
 function apply(req: KiroRequest, decision: Decision): KiroRequest {
   if (decision.mode !== "hint") return req;
   const state = req.conversationState;
@@ -128,8 +112,6 @@ function apply(req: KiroRequest, decision: Decision): KiroRequest {
   return { ...req, conversationState: { ...state, currentMessage: { ...state.currentMessage, userInputMessage: { ...current, content } } } };
 }
 
-// `toInput` sets `direct: false`, so `decide` never asks for a call the gateway would have to write
-// as an AWS event stream. Reaching these is a bug; throwing sends the request upstream untouched.
 const unsupported = (): never => {
   throw new Error("kiro_direct_unsupported");
 };

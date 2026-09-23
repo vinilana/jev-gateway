@@ -349,9 +349,12 @@ What that costs, and what to know:
 - **Only `hint` mode.** Kiro's API has no `tool_choice`, so the gateway appends Jev's suggestion
   after the current message, and the model may ignore it. It never forces a tool, never answers
   in Kiro's place (`direct`), and never asks for a text reply (`none`).
-- **Files created directly in your home folder during a session** (not inside an existing
-  folder) land in `~/.jev-gateway/kiro-home` instead, because that is `HOME` for Kiro and every
-  command it runs.
+- **Commands Kiro runs get your real home back.** The launcher also sets `BASH_ENV` to a file
+  that restores `HOME` (and loads your own `BASH_ENV`, if you had one), so `git config`,
+  `npm login` or a `jev-*` command run through Kiro read and write your real files.
+- **Kiro's own file tools still see `~/.jev-gateway/kiro-home` as home.** A file they write at the
+  top of it, or one replacing a symlink there, stays in that folder and hides yours. `jev-kiro`
+  lists such files on every launch and never removes them.
 - **Settings Kiro changes during a session** (`kiro-cli settings ...`) go to the copy of
   `cli.json` and are lost on the next launch. Change settings with plain `kiro-cli`.
 - **No token counts.** Kiro's backend answers in an AWS event stream, which the gateway forwards

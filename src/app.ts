@@ -240,7 +240,6 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     if (!req) return c.json({ error: { message: "Body must be a JSON object", type: "invalid_request_error" } }, 400);
     const adapters = { chat: chatAdapter, responses: responsesAdapter, messages: messagesAdapter, gemini: geminiAdapter, kiro: kiroAdapter };
     // Chat Completions and Anthropic Messages both use `messages`; only Anthropic has a top-level
-    // `system` or tools described by `input_schema`. Gemini uses `contents`, Kiro `conversationState`.
     const tools = Array.isArray(req.tools) ? (req.tools as Record<string, unknown>[]) : [];
     const guess = "conversationState" in req
       ? "kiro"
@@ -275,9 +274,6 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.all("/v1/*", proxy);
   app.all("/v1beta/*", proxy);
 
-  // AWS JSON APIs (Kiro's) post every operation to `/` and name it in `x-amz-target`. Only the chat
-  // call is routed; profile, model-list and telemetry calls go through untouched. A `/` without the
-  // header is not an API call the gateway knows, so it stays a 404.
   const kiroChat = route(kiroAdapter);
   app.post("/", async (c) => {
     const target = c.req.header("x-amz-target");

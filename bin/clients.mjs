@@ -1,5 +1,4 @@
 // How each coding agent is pointed at a gateway. Shared by the launchers and the benchmark runner,
-// so a benchmark drives an agent exactly the way the `jev-<client>` launchers do.
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -157,7 +156,6 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
-/** Kiro's region; its API lives at q.<region>.amazonaws.com and its profile belongs to one region. */
 function kiroRegion() {
   return process.env.JEV_KIRO_REGION ?? "us-east-1";
 }
@@ -174,48 +172,76 @@ const isPresent = (path) => {
   }
 };
 
-/** Mirror `from` into `to` as symlinks, except the names in `skip`, dropping links whose source is gone. */
+const ignoreRace = (error) => {
+  if (error?.code !== "EEXIST" && error?.code !== "ENOENT") throw error;
+};
+
 function mirror(from, to, skip) {
   mkdirSync(to, { recursive: true });
   let names = [];
   try {
     names = readdirSync(from).filter((name) => !skip.includes(name));
-  } catch {
-    // Nothing to mirror yet (no ~/.kiro before Kiro's first run).
-  }
+  } catch {}
+  const shadowing = [];
   for (const name of readdirSync(to)) {
+    if (skip.includes(name)) continue;
     const path = join(to, name);
-    if (!skip.includes(name) && !names.includes(name) && lstatSync(path).isSymbolicLink()) rmSync(path);
+    try {
+      if (!lstatSync(path).isSymbolicLink()) shadowing.push(path);
+      else if (!names.includes(name)) rmSync(path);
+    } catch (error) {
+      ignoreRace(error);
+    }
   }
-  for (const name of names) if (!isPresent(join(to, name))) symlinkSync(join(from, name), join(to, name));
+  for (const name of names) {
+    if (isPresent(join(to, name))) continue;
+    try {
+      symlinkSync(join(from, name), join(to, name));
+    } catch (error) {
+      ignoreRace(error);
+    }
+  }
+  return shadowing;
 }
 
-/**
- * Kiro reads its API endpoint only from `~/.kiro/settings/cli.json`, and no variable or flag
- * overrides it. So the launched process gets a home of its own: every entry of the real home is a
- * symlink to the original (login, data, dotfiles), except `~/.kiro/settings/cli.json`, which is a
- * copy of the user's with `api.codewhisperer.service` pointed at the gateway. The user's own
- * files are never written. Rebuilt on every launch, so new entries in the real home show up.
- */
+const shellQuote = (text) => `'${text.replaceAll("'", `'\\''`)}'`;
+
+function writeAtomic(file, content) {
+  writeFileSync(`${file}.${process.pid}`, content);
+  renameSync(`${file}.${process.pid}`, file);
+}
+
 function kiroHome(origin) {
   const real = homedir();
   const home = join(real, ".jev-gateway", "kiro-home");
-  mirror(real, home, [".kiro", ".jev-gateway"]);
-  mirror(join(real, ".kiro"), join(home, ".kiro"), ["settings"]);
-  const settings = join(home, ".kiro", "settings");
-  mirror(join(real, ".kiro", "settings"), settings, ["cli.json"]);
+  const shadowing = [
+    ...mirror(real, home, [".kiro", ".jev-gateway"]),
+    ...mirror(join(real, ".kiro"), join(home, ".kiro"), ["settings"]),
+    ...mirror(join(real, ".kiro", "settings"), join(home, ".kiro", "settings"), ["cli.json"]),
+  ];
+  if (shadowing.length) {
+    console.error(
+      `jev-kiro: these were written inside Kiro's own home, and Kiro sees them instead of yours:\n` +
+        shadowing.map((path) => `  ${path}`).join("\n") +
+        `\n  Move them to your home folder, or remove them, to see yours again.`,
+    );
+  }
   let cli = {};
   try {
     cli = JSON.parse(readFileSync(join(real, ".kiro", "settings", "cli.json"), "utf8"));
-  } catch {
-    // No settings of the user's yet: the override alone is a valid file.
-  }
+  } catch {}
   cli["api.codewhisperer.service"] = { endpoint: origin, region: kiroRegion() };
-  // Written aside and renamed, so a Kiro session already running never reads half a file.
-  const file = join(settings, "cli.json");
-  writeFileSync(`${file}.${process.pid}`, JSON.stringify(cli, null, 2));
-  renameSync(`${file}.${process.pid}`, file);
+  writeAtomic(join(home, ".kiro", "settings", "cli.json"), JSON.stringify(cli, null, 2));
   return home;
+}
+
+function kiroBashEnv() {
+  const real = homedir();
+  const file = join(real, ".jev-gateway", "kiro-bash-env.sh");
+  const previous = process.env.BASH_ENV;
+  const chained = previous && previous !== file ? `. ${shellQuote(previous)}\n` : "";
+  writeAtomic(file, `export HOME=${shellQuote(real)}\n${chained}`);
+  return file;
 }
 
 export const kiro = {
@@ -227,9 +253,7 @@ export const kiro = {
   upstreamHelp:
     "JEV_KIRO_REGION              region of your Kiro profile (default us-east-1)\n" +
     "JEV_KIRO_UPSTREAM_BASE_URL   where Kiro traffic goes (default https://q.<region>.amazonaws.com)",
-  // Only HOME changes. Kiro keeps its own login (shared through the symlinks), so the gateway
-  // forwards its bearer token untouched.
-  env: (origin) => ({ HOME: kiroHome(origin) }),
+  env: (origin) => ({ HOME: kiroHome(origin), BASH_ENV: kiroBashEnv() }),
   configHelp: (origin) =>
     `# Keep the gateway running (jev-kiro --start), then add to ~/.kiro/settings/cli.json:\n` +
     JSON.stringify({ "api.codewhisperer.service": { endpoint: origin, region: kiroRegion() } }, null, 2) +

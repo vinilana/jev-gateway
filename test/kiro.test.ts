@@ -1,30 +1,16 @@
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KIRO_CHAT_TARGET } from "../src/adapters/kiro.js";
 import { createApp } from "../src/app.js";
 import { NO_TOOL } from "../src/questions.js";
 import { fakeJev, fakeUpstream, testConfig } from "./helpers.js";
 
-// @ts-ignore: bin/ is plain JavaScript outside the tsconfig include; resolved at runtime.
-const clients = await import("../bin/clients.mjs");
+const clientsModule: string = "../bin/clients.mjs";
+const clients = await import(clientsModule);
 
-/**
- * Kiro CLI 1.29.4 wire compatibility.
- *
- * Fixture provenance: Kiro was run with `api.codewhisperer.service` pointed at a local capture
- * server (no network), then through the gateway against the real backend with JEV_DEBUG_DUMP_DIR
- * set. Every call is `POST /` with an `x-amz-target`, a `Bearer` token and
- * `content-type: application/x-amz-json-1.0`; chat is `GenerateAssistantResponse`, the others are
- * `GetProfile`, `ListAvailableModels` and `SendTelemetryEvent`. The chat body is
- * `{ conversationState, profileArn }`: tools in `currentMessage.userInputMessage
- * .userInputMessageContext.tools[].toolSpecification` (12 native, 38 with MCP servers), the typed
- * text between USER MESSAGE markers after context entries, tool calls in
- * `history[].assistantResponseMessage.toolUses`, and their results in the next message's
- * `toolResults`, whose `content` is then empty. The real backend answered the hinted requests,
- * the tool-result turn included, with 200. Shapes below are the captured ones, trimmed.
- */
 
 const executeBash = {
   toolSpecification: {
@@ -51,7 +37,6 @@ const fsRead = {
   },
 };
 
-/** Closed schema: would allow a `direct` answer on any other wire format. */
 const session = {
   toolSpecification: {
     name: "session",
@@ -88,7 +73,6 @@ const kiroRequest = (current = userMessage(typed("list the files here")), histor
   profileArn: "arn:aws:codewhisperer:us-east-1:000000000000:profile/TEST",
 });
 
-/** The turn after a tool call: its result in `toolResults`, and nothing typed. */
 const toolResultTurn = () =>
   kiroRequest(userMessage("", { toolResults: [{ toolUseId: "toolu_1", content: [{ text: "# Total entries: 1\n\na.txt" }], status: "success" }] }), [
     { userInputMessage: { content: typed("list the files here"), origin: "KIRO_CLI", modelId: "auto" } },
@@ -169,7 +153,6 @@ describe("kiro GenerateAssistantResponse", () => {
   });
 
   it("never asks Jev for arguments, since it cannot answer in Kiro's place", async () => {
-    // fakeJev throws on a question it has no answer for, so any argument question fails this test.
     const body = kiroRequest(userMessage(typed("compact the session"), { tools: [executeBash, session] }));
     const { post, jev, upstream } = setup({ tool: { choice: "session" }, needs_tool: { noul: 0.95 } });
     const res = await post(body);
@@ -177,6 +160,16 @@ describe("kiro GenerateAssistantResponse", () => {
     expect(Object.keys(jev.requests[0]!.questions)).toEqual(["tool", "needs_tool"]);
     expect(res.headers.get("x-jev-gateway-mode")).toBe("hint");
     expect(upstream.calls).toHaveLength(1);
+  });
+
+  it("hints a tool that takes no arguments instead of trying to answer for it", async () => {
+    const noArgs = { toolSpecification: { name: "introspect", description: "Describe Kiro itself.", inputSchema: { json: { type: "object", properties: {} } } } };
+    const body = kiroRequest(userMessage(typed("what can you do?"), { tools: [executeBash, noArgs] }));
+    const { post, upstream } = setup({ tool: { choice: "introspect" }, needs_tool: { noul: 0.95 } });
+    const res = await post(body);
+
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("hint");
+    expect(upstream.calls[0]!.body.conversationState.currentMessage.userInputMessage.content).toContain('"introspect"');
   });
 
   it("forwards untouched when Jev finds no tool is needed, since a hint cannot ask for silence", async () => {
@@ -215,7 +208,6 @@ describe("kiro GenerateAssistantResponse", () => {
 
     expect(res.status).toBe(200);
     expect(jev.requests).toHaveLength(0);
-    // Proxied calls stream their body through, which the fake upstream does not read back.
     expect(upstream.calls[0]!.url).toBe("https://q.test/?origin=KIRO_CLI");
     expect(upstream.calls[0]!.headers.get("x-amz-target")).toBe("AmazonCodeWhispererService.ListAvailableModels");
   });
@@ -246,12 +238,18 @@ const others = [clients.codex, clients.claude, clients.opencode, clients.gemini]
 const origin = "http://127.0.0.1:8793";
 
 describe("jev-kiro spec", () => {
-  const saved = { HOME: process.env.HOME, JEV_KIRO_REGION: process.env.JEV_KIRO_REGION, JEV_KIRO_UPSTREAM_BASE_URL: process.env.JEV_KIRO_UPSTREAM_BASE_URL };
+  const saved = {
+    HOME: process.env.HOME,
+    BASH_ENV: process.env.BASH_ENV,
+    JEV_KIRO_REGION: process.env.JEV_KIRO_REGION,
+    JEV_KIRO_UPSTREAM_BASE_URL: process.env.JEV_KIRO_UPSTREAM_BASE_URL,
+  };
   let home: string;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "jev-kiro-"));
     process.env.HOME = home;
+    delete process.env.BASH_ENV;
     delete process.env.JEV_KIRO_REGION;
     delete process.env.JEV_KIRO_UPSTREAM_BASE_URL;
   });
@@ -293,13 +291,12 @@ describe("jev-kiro spec", () => {
     const before = readFileSync(join(home, ".kiro", "settings", "cli.json"), "utf8");
     const env = kiro.env!(origin);
 
-    expect(Object.keys(env)).toEqual(["HOME"]);
+    expect(Object.keys(env)).toEqual(["HOME", "BASH_ENV"]);
     const own = env.HOME!;
     expect(own).toBe(join(home, ".jev-gateway", "kiro-home"));
     const cli = JSON.parse(readFileSync(join(own, ".kiro", "settings", "cli.json"), "utf8"));
     expect(cli).toEqual({ "chat.defaultModel": "claude-sonnet-4", "api.codewhisperer.service": { endpoint: origin, region: "us-east-1" } });
     expect(readFileSync(join(home, ".kiro", "settings", "cli.json"), "utf8")).toBe(before);
-    // Everything else is the user's own, through symlinks: login, agents, dotfiles.
     expect(readlinkSync(join(own, ".gitconfig"))).toBe(join(home, ".gitconfig"));
     expect(readlinkSync(join(own, ".kiro", "agents"))).toBe(join(home, ".kiro", "agents"));
     expect(readlinkSync(join(own, ".kiro", "settings", "mcp.json"))).toBe(join(home, ".kiro", "settings", "mcp.json"));
@@ -315,6 +312,41 @@ describe("jev-kiro spec", () => {
 
     expect(readlinkSync(join(own, ".npmrc"))).toBe(join(home, ".npmrc"));
     expect(() => lstatSync(join(own, ".gitconfig"))).toThrow();
+  });
+
+  it("gives the commands Kiro runs the real home back, keeping any BASH_ENV of the user's", () => {
+    writeFileSync(join(home, "mine.sh"), "export FROM_USER_BASH_ENV=yes\n");
+    process.env.BASH_ENV = join(home, "mine.sh");
+    const env = kiro.env!(origin);
+    const out = execFileSync("bash", ["-c", 'echo "$HOME|$FROM_USER_BASH_ENV"'], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+    });
+
+    expect(out.trim()).toBe(`${home}|yes`);
+    process.env.BASH_ENV = env.BASH_ENV;
+    expect(readFileSync(kiro.env!(origin).BASH_ENV!, "utf8")).not.toContain(". ");
+  });
+
+  it("keeps and reports files written inside its own home instead of removing them", () => {
+    userSettings();
+    const own = kiro.env!(origin).HOME!;
+    rmSync(join(own, ".gitconfig"));
+    writeFileSync(join(own, ".gitconfig"), "[user]\n  name = changed inside kiro\n");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    kiro.env!(origin);
+
+    expect(readFileSync(join(own, ".gitconfig"), "utf8")).toContain("changed inside kiro");
+    expect(warn.mock.calls.flat().join("\n")).toContain(join(own, ".gitconfig"));
+    warn.mockRestore();
+  });
+
+  it("puts back a link that went missing between launches", () => {
+    userSettings();
+    const own = kiro.env!(origin).HOME!;
+    rmSync(join(own, ".gitconfig"));
+    expect(() => kiro.env!(origin)).not.toThrow();
+    expect(readlinkSync(join(own, ".gitconfig"))).toBe(join(home, ".gitconfig"));
   });
 
   it("works before Kiro has ever written settings", () => {
