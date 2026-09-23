@@ -28,7 +28,7 @@ matching it. Do that first, every time.
    entry.
 3. **Never write the client's own configuration.** Launchers point a client at the gateway with
    arguments and environment for that one process. Nothing under `~/.codex`, `~/.claude`,
-   `~/.config/opencode` is modified.
+   `~/.config/opencode`, `~/.kiro` is modified.
 4. **Keep prompt caches valid.** If rewriting a request would invalidate a cached prefix, add a
    hint after the client's last block instead (`hint` mode).
 5. **Few dependencies.** The runtime dependencies fit on one line of `package.json`. Prefer twenty
@@ -51,7 +51,7 @@ and each conventional one gets a changelog line too, so they need the same care 
 - `perf` = same behaviour, cheaper: patch bump, "Changed".
 - `docs`, `test`, `refactor`, `build`, `ci`, `chore`, `style` = no release, not in the changelog.
 - `!` (`feat!:`) when users must change something to keep working. While `0.x` that is a minor bump.
-- Scope is optional and names the part: `brew`, `opencode`, `gemini`, `dashboard`, `readme`.
+- Scope is optional and names the part: `brew`, `opencode`, `gemini`, `kiro`, `dashboard`, `readme`.
 
 The subject becomes a changelog line, so write it for a user of the gateway, not a reader of the
 diff: `fix: read token usage from streams that send no content-type`, not

@@ -92,6 +92,8 @@ export interface RouterInput {
    * the conversation instead, for requests where rewriting tool_choice is rejected or too costly.
    */
   steer?: "tool_choice" | "hint";
+  /** False where the gateway cannot write the client's answer itself, so `direct` is never chosen. */
+  direct?: boolean;
 }
 
 /** A tool call Jev produced in full, to be rendered in the client's wire format. */

@@ -5,9 +5,9 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex**, **Claude Code** and **OpenCode** out of the box, including on ChatGPT and
-claude.ai subscriptions, with Gemini API clients, and with any client that speaks the OpenAI,
-Anthropic or Google Gemini APIs.
+It works with **Codex**, **Claude Code**, **OpenCode** and **Kiro** out of the box, including on
+ChatGPT and claude.ai subscriptions, with Gemini API clients, and with any client that speaks the
+OpenAI, Anthropic or Google Gemini APIs.
 
 > Independent project, not affiliated with or endorsed by TypeSafe. "Jev" is TypeSafe's model and
 > this gateway is a client of its public API.
@@ -31,6 +31,7 @@ jev-codex      # use it exactly like `codex`
 jev-claude     # use it exactly like `claude`
 jev-opencode   # use it exactly like `opencode` (stable v1)
 jev-gemini     # Gemini CLI, with a Gemini API key
+jev-kiro       # use it exactly like `kiro-cli`
 ```
 
 **3. Answer two questions, once**
@@ -74,7 +75,7 @@ before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini`.
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-gemini` and `jev-kiro`.
 
 | Command | What it does |
 | --- | --- |
@@ -90,8 +91,9 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode` and `jev-gemini
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791 and Gemini clients 8788. Change them with
-`JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT` and `JEV_GEMINI_PORT`.
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788 and Kiro 8793. Change
+them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`, `JEV_GEMINI_PORT` and
+`JEV_KIRO_PORT`.
 
 ## Dashboard
 
@@ -323,6 +325,48 @@ This covers clients that use a **Gemini API key**. A Gemini CLI signed in with a
 talks to a different Google service and does not go through the gateway. The Gemini path has unit
 tests but has not yet been run against the real API.
 
+## Using it with Kiro
+
+Tested with Kiro CLI 1.29.4 on Linux.
+
+```bash
+jev-kiro   # use it exactly like `kiro-cli`, e.g. jev-kiro chat
+```
+
+Kiro reads its API endpoint only from `~/.kiro/settings/cli.json` (`api.codewhisperer.service`);
+no environment variable or flag we found overrides it. So `jev-kiro` gives the launched `kiro-cli` a
+home folder of its own, `~/.jev-gateway/kiro-home`, rebuilt on every launch:
+
+- every entry of your home is a symlink to the original, so Kiro keeps its login, agents,
+  steering and MCP servers, and the commands it runs see your dotfiles;
+- `~/.kiro/settings/cli.json` is a copy of yours with `api.codewhisperer.service` pointed at the
+  gateway on `http://127.0.0.1:8793`.
+
+Your own `~/.kiro` is never written. Kiro's login token travels to the backend untouched.
+
+What that costs, and what to know:
+
+- **Only `hint` mode.** Kiro's API has no `tool_choice`, so the gateway appends Jev's suggestion
+  after the current message, and the model may ignore it. It never forces a tool, never answers
+  in Kiro's place (`direct`), and never asks for a text reply (`none`).
+- **Files created directly in your home folder during a session** (not inside an existing
+  folder) land in `~/.jev-gateway/kiro-home` instead, because that is `HOME` for Kiro and every
+  command it runs.
+- **Settings Kiro changes during a session** (`kiro-cli settings ...`) go to the copy of
+  `cli.json` and are lost on the next launch. Change settings with plain `kiro-cli`.
+- **No token counts.** Kiro's backend answers in an AWS event stream, which the gateway forwards
+  but does not read, so the dashboard shows requests and decisions without tokens.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `JEV_KIRO_REGION` | `us-east-1` | Region of your Kiro profile |
+| `JEV_KIRO_UPSTREAM_BASE_URL` | `https://q.<region>.amazonaws.com` | Where the gateway forwards Kiro traffic |
+| `JEV_KIRO_PORT` | `8793` | Router port for Kiro |
+
+Run end to end with a real Kiro CLI, the real Kiro backend and the real Jev (TypeSafe): Jev
+suggested `fs_read`, Kiro used it, and the next turn went through untouched as `no_tool_needed`.
+The hinted requests, including a tool-result turn, were answered normally. Not yet run on macOS.
+
 ## Running it as a server for your own app
 
 Work from a checkout:
@@ -340,7 +384,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8787/v1")  # your usual provider key still works
 ```
 
-The gateway routes four endpoints and proxies every other `/v1/*` or `/v1beta/*` path unchanged:
+The gateway routes five endpoints and proxies every other `/v1/*` or `/v1beta/*` path unchanged:
 
 | Endpoint | API |
 | --- | --- |
@@ -348,6 +392,7 @@ The gateway routes four endpoints and proxies every other `/v1/*` or `/v1beta/*`
 | `POST /v1/responses` | OpenAI Responses |
 | `POST /v1/messages` | Anthropic Messages |
 | `POST /v1beta/models/*` | Google Gemini API (`generateContent`, `streamGenerateContent`) |
+| `POST /` with `x-amz-target: AmazonCodeWhispererStreamingService.GenerateAssistantResponse` | Kiro's backend. Other `x-amz-target` operations on `/` are proxied unchanged |
 
 By default your client's own `Authorization` header is forwarded to the provider. Set
 `UPSTREAM_API_KEY` to have the gateway hold the provider key instead, and `ROUTER_API_KEY` to
@@ -395,7 +440,7 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | --- | --- | --- |
 | `direct` | Jev is confident about the tool and every argument is an enum, boolean, or constant | The gateway builds the tool call itself, streaming included. **No LLM call.** |
 | `forced` | Jev is confident about the tool, but some arguments are open-ended | Forwarded with `tool_choice` set to that tool, so the LLM only fills in arguments. `ARGS_MODEL` can send these to a cheaper model |
-| `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
+| `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, a cached conversation, or Kiro, whose API has no `tool_choice`) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
 | `none` | Jev is confident that no tool is needed | Forwarded with `tool_choice: "none"` |
 | `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, or the caller already chose | Forwarded byte for byte. `x-jev-gateway-reason` says why |
 
