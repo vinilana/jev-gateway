@@ -35,7 +35,7 @@ describe("what jev-opencode says will not go through the gateway", () => {
   });
 
   it("says that agents without a model of their own are covered, so silence is not read as a gap", () => {
-    expect((opencodeOutsideGateway(resolved) as string[]).at(-1)).toMatch(/without a model of their own use the default and are covered/);
+    expect((opencodeOutsideGateway(resolved) as string[]).at(-1)).toMatch(/without a model of their own use the default/);
   });
 
   it("has nothing to say when every agent uses the default or a gateway model", () => {

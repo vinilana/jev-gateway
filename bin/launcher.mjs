@@ -22,13 +22,14 @@ const ENV_FILES = [...(FROM_SOURCE && !process.env.JEV_SKIP_PROJECT_ENV ? [join(
  * @param {string} spec.client       binary to run, e.g. "claude"; also names the log/pid files
  * @param {string} spec.portEnv      env var overriding the router port
  * @param {number} spec.defaultPort
- * @param {() => string} spec.upstream        where this client's traffic is forwarded
+ * @param {(context?: unknown) => string} spec.upstream where this client's traffic is forwarded
  * @param {string} spec.upstreamHelp          help text describing the upstream default
  * @param {(origin: string) => string[]} [spec.args]   extra leading arguments for the client
- * @param {(origin: string) => Record<string, string>} [spec.env]  extra environment for the client
- * @param {(origin: string, argv: string[]) => Promise<string[]>} [spec.notices]  what the user should
+ * @param {(origin: string, inherited?: object, context?: unknown) => Record<string, string>} [spec.env] extra environment for the client
+ * @param {() => Promise<unknown>} [spec.detect] resolve client config before choosing the upstream
+ * @param {(origin: string, argv: string[], inherited?: object, context?: unknown) => Promise<string[]>} [spec.notices] what the user should
  *   know before this session starts, e.g. traffic that will not reach the gateway; never throws
- * @param {(origin: string) => string} spec.configHelp  how to wire the client up permanently
+ * @param {(origin: string, context?: unknown) => string} spec.configHelp how to wire the client up permanently
  */
 /** Load the key for Jev and friends; real environment variables win over both files. */
 export function loadEnv() {
@@ -45,6 +46,8 @@ export async function runLauncher(spec) {
   const origin = `http://127.0.0.1:${port}`;
   const logFile = join(STATE_DIR, `${spec.client}.log`);
   const pidFile = join(STATE_DIR, `${spec.client}.pid`);
+  let detected;
+  const context = () => (detected ??= Promise.resolve(spec.detect?.()));
 
   const help = `${spec.name}: ${spec.client} with tool selection routed through Jev
 
@@ -79,7 +82,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   /** A notice is a courtesy: whatever goes wrong while working it out, the session still starts. */
   const notices = async (argv) => {
     try {
-      const lines = (await spec.notices?.(origin, argv)) ?? [];
+      const lines = (await spec.notices?.(origin, argv, process.env, await context())) ?? [];
       return lines.map((line, index) => (index === 0 ? `${spec.name}: ${line}` : line));
     } catch {
       return [];
@@ -115,7 +118,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   };
 
   const ensureRouter = async () => {
-    const upstream = spec.upstream().replace(/\/+$/, "");
+    const upstream = spec.upstream(await context()).replace(/\/+$/, "");
     const running = await health();
     if (running) {
       if (running.upstream === upstream) return;
@@ -224,10 +227,10 @@ Environment (or ${ENV_FILES.at(-1)}):
         : `${spec.name}: routing off (baseline mode). Requests go straight to the LLM, tokens are still metered.`,
     );
   }
-  if (flag === "--print-config") return console.log(spec.configHelp(origin));
+  if (flag === "--print-config") return console.log(spec.configHelp(origin, await context()));
   if (flag === "--start") {
     await ensureRouter();
-    return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream()} (logs: ${logFile})`);
+    return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream(await context())} (logs: ${logFile})`);
   }
   if (flag === "--status") {
     const running = await health();
@@ -267,7 +270,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   for (const line of warnings) console.error(line);
   const child = spawn(spec.client, [...(spec.args?.(origin) ?? []), ...process.argv.slice(2)], {
     stdio: "inherit",
-    env: { ...process.env, ...spec.env?.(origin) },
+    env: { ...process.env, ...spec.env?.(origin, process.env, await context()) },
   });
   child.on("error", (error) => {
     console.error(`${spec.name}: could not run ${spec.client}: ${error.message}`);

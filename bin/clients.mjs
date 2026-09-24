@@ -69,17 +69,70 @@ export const claude = {
     JSON.stringify({ env: { ANTHROPIC_BASE_URL: origin } }, null, 2),
 };
 
-/** Where OpenCode traffic goes by default; override with JEV_OPENCODE_UPSTREAM_BASE_URL. */
-function opencodeUpstream() {
-  return process.env.JEV_OPENCODE_UPSTREAM_BASE_URL ?? "https://api.openai.com/v1";
-}
-
-/** Model id selected as `jev-gateway/<model>`; override with JEV_OPENCODE_MODEL. */
-function opencodeModel() {
-  return process.env.JEV_OPENCODE_MODEL ?? "gpt-5";
-}
-
 const OPENCODE_PROVIDER = "jev-gateway";
+const OPENCODE_UPSTREAMS = { opencode: "https://opencode.ai/zen/v1", "opencode-go": "https://opencode.ai/zen/go/v1" };
+
+const isLocalHost = (hostname) => {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "0.0.0.0" || host === "::1" || host.startsWith("127.") || host.startsWith("::ffff:127.") || host === "::ffff:7f00:1";
+};
+
+/** A local gateway cannot be an upstream, including one started for another client. */
+function isGatewayAddress(url, env) {
+  const ports = [8787, 8788, 8789, 8790, 8791, ...Object.entries(env).filter(([name]) => /^JEV_[A-Z]+_PORT$/.test(name)).map(([, value]) => Number(value))];
+  return isLocalHost(url.hostname) && ports.includes(Number(url.port));
+}
+
+/** Follow only ordinary API roots: resolved tokens in a URL path or query must never reach /health or logs. */
+function safeUpstream(value, env) {
+  if (typeof value !== "string" || value.includes("{")) return undefined;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
+    const builtIn = Object.values(OPENCODE_UPSTREAMS).some((upstream) => value === upstream || value === `${upstream}/`);
+    if (!builtIn && !["/", "/v1", "/v1/", "/api/v1", "/api/v1/"].includes(url.pathname)) return undefined;
+    if (isGatewayAddress(url, env)) return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The user's resolved OpenCode config comes from OpenCode itself, before gateway settings are injected. */
+export function detectOpencode(resolved, env = process.env) {
+  const override = env.JEV_OPENCODE_UPSTREAM_BASE_URL;
+  if (override && !safeUpstream(override, env)) {
+    throw new Error("JEV_OPENCODE_UPSTREAM_BASE_URL must be a /v1 API root outside Jev (value omitted because URLs may contain secrets)");
+  }
+  const openai = { upstream: override ?? "https://api.openai.com/v1", model: env.JEV_OPENCODE_MODEL ?? "gpt-5" };
+  if (env.JEV_OPENCODE_MODEL) return openai;
+  const id = providerOf(resolved?.model);
+  if (id && Object.hasOwn(OPENCODE_UPSTREAMS, id)) return { upstream: override ?? OPENCODE_UPSTREAMS[id], rebind: id };
+  const provider = id && id !== OPENCODE_PROVIDER && isObject(resolved?.provider) ? resolved.provider[id] : undefined;
+  const baseURL = provider?.npm === "@ai-sdk/openai-compatible" ? safeUpstream(provider.options?.baseURL, env) : undefined;
+  if (baseURL) return { upstream: override ?? baseURL, rebind: id };
+  if (!env.OPENAI_API_KEY && env.OPENCODE_API_KEY) return { upstream: override ?? OPENCODE_UPSTREAMS.opencode, rebind: "opencode" };
+  return openai;
+}
+
+/** An unknown local port may also be another Jev gateway. */
+async function checkLocalUpstream(upstream, fetchImpl = fetch) {
+  const url = new URL(upstream);
+  if (!isLocalHost(url.hostname)) return;
+  try {
+    const response = await fetchImpl(new URL("/health", url), { signal: AbortSignal.timeout(500) });
+    if (!response.ok) return;
+    const health = await response.json();
+    if (health?.status === "ok" && typeof health.upstream === "string" && typeof health.jev === "string") {
+      throw new Error("OpenCode upstream is another Jev gateway; use the original provider URL");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("OpenCode upstream is another Jev gateway")) throw error;
+  }
+}
+
+// Direct spec calls keep the original OpenAI default; the launcher passes OpenCode's resolved setup.
+const directOpencodeSetup = () => detectOpencode(undefined, { JEV_OPENCODE_MODEL: process.env.JEV_OPENCODE_MODEL });
 
 /**
  * Stable custom-provider config for the launched OpenCode process. Injected through
@@ -92,8 +145,14 @@ const OPENCODE_PROVIDER = "jev-gateway";
  * key swap applies here. TYPESAFE_API_KEY is separate — it only authorizes the Jev
  * tool-selection call and is never sent as the LLM upstream credential.
  */
-function opencodeInlineConfig(origin) {
-  const model = opencodeModel();
+function opencodeInlineConfig(origin, setup = directOpencodeSetup()) {
+  if (setup.rebind) {
+    return {
+      $schema: "https://opencode.ai/config.json",
+      provider: { [setup.rebind]: { options: { baseURL: `${origin}/v1` } } },
+    };
+  }
+  const model = setup.model;
   return {
     $schema: "https://opencode.ai/config.json",
     model: `${OPENCODE_PROVIDER}/${model}`,
@@ -134,11 +193,15 @@ export function parseJsonc(text) {
  * launcher's to set, everything else (agents, permissions, other providers) stays as they wrote
  * it. Content that is not a JSON object cannot be merged, so it is dropped, and the notices say so.
  */
-export function opencodeConfigContent(origin, inherited) {
-  const ours = opencodeInlineConfig(origin);
+export function opencodeConfigContent(origin, inherited, setup = directOpencodeSetup()) {
+  const ours = opencodeInlineConfig(origin, setup);
   const theirs = inherited?.trim() ? parseJsonc(inherited) : undefined;
   if (!isObject(theirs)) return JSON.stringify(ours);
-  const provider = { ...(isObject(theirs.provider) ? theirs.provider : {}), ...ours.provider };
+  const provider = { ...(isObject(theirs.provider) ? theirs.provider : {}) };
+  for (const [id, change] of Object.entries(ours.provider)) {
+    const previous = isObject(provider[id]) ? provider[id] : {};
+    provider[id] = { ...previous, ...change, options: { ...(isObject(previous.options) ? previous.options : {}), ...change.options } };
+  }
   return JSON.stringify({ ...theirs, ...ours, provider });
 }
 
@@ -164,8 +227,7 @@ function modelFlag(argv) {
  * provider. Those are the user's choices and are left alone, but a session that quietly skips Jev
  * looks exactly like one where Jev had nothing to decide, so they are said out loud.
  *
- * `resolved` is what `opencode debug config` prints: OpenCode's own merge of every config source,
- * which is the only reliable way to know what an agent will use. A provider counts as covered by
+ * `resolved` comes from OpenCode's own v1 config command or v2 local API. A provider counts as covered by
  * where it sends requests, not by its name, so one the user pointed at the gateway (`origin`)
  * themselves is not reported.
  */
@@ -191,17 +253,16 @@ export function opencodeOutsideGateway(resolved, argv = [], origin) {
   return [
     "these go straight to their provider, not through the gateway, because they name a model of their own:",
     ...outside.map((line) => `  - ${line}`),
-    `Jev only sees requests to ${OPENCODE_PROVIDER}/* models. Agents without a model of their own use the default and are covered.`,
+    `Jev sees requests sent to ${origin ?? "the gateway"}. Agents without a model of their own use the default.`,
   ];
 }
 
-/** Ask OpenCode how it resolves its configuration with ours laid over it. Undefined when it cannot say. */
-function opencodeResolvedConfig(env) {
+/** Run a local OpenCode inspection command. None of its output is logged: provider settings may contain keys. */
+function opencodeJson(args, env) {
   return new Promise((resolve) => {
-    execFile("opencode", ["debug", "config"], { env, timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+    execFile("opencode", args, { env, timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
       if (error) return resolve(undefined);
-      // Log lines may come first, and may hold braces of their own: the JSON starts on a line of its own.
-      const start = stdout.search(/^\{/m);
+      const start = stdout.search(/^[{[]/m);
       if (start < 0) return resolve(undefined);
       try {
         resolve(JSON.parse(stdout.slice(start)));
@@ -212,49 +273,80 @@ function opencodeResolvedConfig(env) {
   });
 }
 
+/** V1 prints a resolved object; V2 exposes the selected model and provider through its local API. */
+async function opencodeResolvedConfig(env) {
+  const old = await opencodeJson(["debug", "config"], env);
+  if (isObject(old) && typeof old.model === "string") return old;
+  const [model, providers, agents] = await Promise.all([
+    opencodeJson(["api", "--standalone", "model.default"], env),
+    opencodeJson(["api", "--standalone", "provider.list"], env),
+    opencodeJson(["api", "--standalone", "agent.list"], env),
+  ]);
+  const selected = model?.data;
+  if (typeof selected?.providerID !== "string" || typeof selected?.modelID !== "string") return undefined;
+  const provider = Array.isArray(providers?.data) ? providers.data.find((entry) => entry?.id === selected.providerID) : undefined;
+  const agent = Object.fromEntries((Array.isArray(agents?.data) ? agents.data : []).flatMap((entry) =>
+    typeof entry?.name === "string" && typeof entry?.model?.providerID === "string" && typeof entry?.model?.modelID === "string"
+      ? [[entry.name, { model: `${entry.model.providerID}/${entry.model.modelID}` }]] : []));
+  return {
+    model: `${selected.providerID}/${selected.modelID}`,
+    provider: { [selected.providerID]: { npm: provider?.package, options: { baseURL: provider?.settings?.baseURL } } },
+    agent,
+  };
+}
+
 export const opencode = {
   name: "jev-opencode",
   client: "opencode",
   portEnv: "JEV_OPENCODE_PORT",
   defaultPort: 8791,
-  upstream: opencodeUpstream,
+  detect: async (inherited = process.env, fetchImpl = fetch) => {
+    const setup = detectOpencode(await opencodeResolvedConfig(inherited), inherited);
+    await checkLocalUpstream(setup.upstream, fetchImpl);
+    return setup;
+  },
+  upstream: (setup = detectOpencode(undefined, process.env)) => setup.upstream,
   upstreamHelp:
-    "JEV_OPENCODE_UPSTREAM_BASE_URL   where OpenCode traffic goes (default https://api.openai.com/v1)\n" +
-    "  JEV_OPENCODE_MODEL               model selected as jev-gateway/<model> (default gpt-5)\n" +
+    "JEV_OPENCODE_UPSTREAM_BASE_URL   where OpenCode traffic goes (default follows its selected provider)\n" +
+    "  JEV_OPENCODE_MODEL               use jev-gateway/<model> on OpenAI instead of following the config\n" +
     "  JEV_OPENCODE_CHECK               off skips listing the agents that bypass the gateway (saves about a second)",
   // No `args`: the model default comes from the injected config below, so a user `-m provider/model`
   // keeps its documented top priority and every other `opencode` flag forwards untouched.
   // The two experimental flags stay off for the launched process only (environment, never a user
   // file): the stable AI SDK provider path above is the supported one.
-  env: (origin, inherited = process.env) => ({
-    OPENCODE_CONFIG_CONTENT: opencodeConfigContent(origin, inherited.OPENCODE_CONFIG_CONTENT),
+  env: (origin, inherited = process.env, setup = directOpencodeSetup()) => ({
+    OPENCODE_CONFIG_CONTENT: opencodeConfigContent(origin, inherited.OPENCODE_CONFIG_CONTENT, setup),
     OPENCODE_EXPERIMENTAL_NATIVE_LLM: "false",
     OPENCODE_EXPERIMENTAL_CODE_MODE: "false",
   }),
   // Asking OpenCode costs about a second, which is OpenCode loading its configuration.
   // JEV_OPENCODE_CHECK=off skips that part; an inline config that had to be dropped is always said.
-  notices: async (origin, argv, inherited = process.env) => {
+  notices: async (origin, argv, inherited = process.env, setup = detectOpencode(undefined, inherited)) => {
     const content = inherited.OPENCODE_CONFIG_CONTENT;
     const dropped = content?.trim() && !isObject(parseJsonc(content))
       ? ["OPENCODE_CONFIG_CONTENT in your environment is not a JSON object, so this session gets only the gateway's settings from it."]
       : [];
     if (inherited.JEV_OPENCODE_CHECK === "off") return dropped;
-    const resolved = await opencodeResolvedConfig({ ...inherited, ...opencode.env(origin, inherited) });
+    const resolved = await opencodeResolvedConfig({ ...inherited, ...opencode.env(origin, inherited, setup) });
     const outside = opencodeOutsideGateway(resolved, argv, origin);
     // The launcher prefixes only the first line with its name; a second notice needs its own.
     return dropped.length && outside.length ? [...dropped, `${opencode.name}: ${outside[0]}`, ...outside.slice(1)] : [...dropped, ...outside];
   },
-  configHelp: (origin) => {
+  configHelp: (origin, setup = directOpencodeSetup()) => {
     // No OPENCODE_CONFIG_CONTENT one-liner here: single-quoting raw JSON breaks when a custom
     // model ID contains an apostrophe. The opencode.json file workflow below needs no shell
     // quoting and matches what `jev-opencode --print-config` documents.
-    const config = opencodeInlineConfig(origin);
-    const manual = JSON.stringify({ model: config.model, small_model: config.small_model, provider: config.provider }, null, 2);
+    const config = opencodeInlineConfig(origin, setup);
+    const manual = JSON.stringify(setup.rebind ? { provider: config.provider } : { model: config.model, small_model: config.small_model, provider: config.provider }, null, 2);
+    const start = setup.rebind && !Object.hasOwn(OPENCODE_UPSTREAMS, setup.rebind)
+      ? `# Start with: JEV_OPENCODE_UPSTREAM_BASE_URL=${setup.upstream} jev-opencode --start\n`
+      : "";
     return (
+      start +
       `# Keep the gateway running (jev-opencode --start), then add to opencode.json\n` +
       `# (project root or ~/.config/opencode/opencode.json):\n` +
       `${manual}\n` +
-      `# then select it with: opencode --model ${config.model}`
+      (setup.rebind ? "# Keep your selected model; only this provider's baseURL moves." : `# then select it with: opencode --model ${config.model}`)
     );
   },
 };
@@ -274,4 +366,3 @@ export const gemini = {
     `#   GEMINI_API_BASE=${origin}\n` +
     `#   or endpoint: ${origin}/v1beta\n`,
 };
-
