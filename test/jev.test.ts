@@ -38,6 +38,13 @@ describe("choosing a provider", () => {
     expect(resolveModel("opencode", "typesafe/jev-1.13")).toBe("jev-1.13-free");
   });
 
+  it("takes a model id it has not heard of when it has the provider's shape", () => {
+    expect(resolveModel("typesafe", "jev-1.14")).toBe("jev-1.14");
+    expect(resolveModel("openrouter", "typesafe/jev-1.14-20261001")).toBe("typesafe/jev-1.14-20261001");
+    expect(resolveModel("vercel", "typesafe-ai/jev-1.14")).toBe("typesafe-ai/jev-1.14");
+    expect(resolveModel("opencode", "jev-1.14")).toBe("jev-1.13-free");
+  });
+
   it("reads the matching key, endpoint and model into the config", () => {
     const config = loadConfig({ AI_GATEWAY_API_KEY: "vck", JEV_MODEL: "jev-latest" });
     expect(config).toMatchObject({ jevProvider: "vercel", jevApiKey: "vck", jevModel: "typesafe-ai/jev", jevUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone" });
