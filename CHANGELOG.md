@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/vinilana/jev-gateway/compare/v0.4.3...v0.5.0) (2026-09-25)
+
+
+### Added
+
+* jev-devin routes Devin CLI tool calls through Jev ([#44](https://github.com/vinilana/jev-gateway/issues/44)) ([f23d1ca](https://github.com/vinilana/jev-gateway/commit/f23d1ca8853ac2a8b798caa941b38971b9bcfad4))
+* **kilo:** add jev-kilo, a launcher for Kilo CLI ([#48](https://github.com/vinilana/jev-gateway/issues/48)) ([34f6de9](https://github.com/vinilana/jev-gateway/commit/34f6de9b38b4f32a50a0f65b262989ae1270405a))
+* reach Jev with an OpenCode Zen key ([#27](https://github.com/vinilana/jev-gateway/issues/27)) ([aac48a9](https://github.com/vinilana/jev-gateway/commit/aac48a9150fc234369d670ecf881993053198fa1))
+
+
+### Fixed
+
+* **claude:** never answer a thinking conversation by itself ([#39](https://github.com/vinilana/jev-gateway/issues/39)) ([9ec3e0e](https://github.com/vinilana/jev-gateway/commit/9ec3e0e0988137712f42b88b7c2aa0c6ba2e4e9a))
+
 ## [0.4.3](https://github.com/vinilana/jev-gateway/compare/v0.4.2...v0.4.3) (2026-09-23)
 
 
