@@ -3,6 +3,7 @@ import type { Decision } from "../decide.js";
 import { textOf, truncate } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
+import { hasMessagesMultimodal, MULTIMODAL_SKIP } from "../multimodal.js";
 
 /** Anthropic Messages API (`POST /v1/messages`) — the wire format Claude Code speaks. */
 
@@ -48,6 +49,7 @@ function toTools(raw: MessagesTool[]): RouterTool[] {
 }
 
 function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | { skip: string } {
+  if (hasMessagesMultimodal(req)) return { skip: MULTIMODAL_SKIP };
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
   const clip = (value: unknown) => truncate(textOf(value), maxMessageChars);
 

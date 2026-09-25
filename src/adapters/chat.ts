@@ -3,6 +3,7 @@ import type { Decision } from "../decide.js";
 import { textOf, truncate } from "../state.js";
 import type { ChatRequest, DirectCall, RouterInput, RouterTool, ToolDef, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
+import { hasChatMultimodal, MULTIMODAL_SKIP } from "../multimodal.js";
 
 /** OpenAI Chat Completions (`POST /v1/chat/completions`). */
 
@@ -32,6 +33,10 @@ function toTools(rawTools: ToolDef[]): RouterTool[] {
 
 function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
+  // Conservative: any image/audio/file part (user screenshots, MCP-returned
+  // screenshots, mixed results, file refs) bypasses before truncation/Jev.
+  // Never downloads URLs or sends payloads to Jev.
+  if (hasChatMultimodal(req.messages)) return { skip: MULTIMODAL_SKIP };
   const rawTools = Array.isArray(req.tools) ? req.tools : [];
   // A function with no name is a body upstream will refuse; it is not ours to guess at.
   if (rawTools.some((tool) => tool.type === "function" ? !tool.function?.name : typeof tool.type !== "string")) {

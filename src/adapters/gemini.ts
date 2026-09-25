@@ -1,6 +1,7 @@
 import { truncate } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
+import { hasGeminiMultimodal, MULTIMODAL_SKIP } from "../multimodal.js";
 
 export interface GeminiPart {
   text?: string;
@@ -52,6 +53,7 @@ export interface GeminiRequest {
 /** Google Gemini API (`POST /v1beta/models/...:generateContent` and `:streamGenerateContent`). */
 function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.contents)) return { skip: "no_messages" };
+  if (hasGeminiMultimodal(req.contents)) return { skip: MULTIMODAL_SKIP };
   const config = req.toolConfig?.functionCallingConfig;
   // A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
   const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;

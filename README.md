@@ -528,7 +528,7 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | `forced` | Jev is confident about the tool, but some arguments are open-ended | Forwarded with `tool_choice` set to that tool, so the LLM only fills in arguments. `ARGS_MODEL` can send these to a cheaper model |
 | `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
 | `none` | Jev is confident that no tool is needed | Forwarded with `tool_choice: "none"` |
-| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, or the caller already chose | Forwarded byte for byte. `x-jev-gateway-reason` says why |
+| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, the caller already chose, or retained content contains media or opaque references | Forwarded byte for byte. `x-jev-gateway-reason` says why |
 
 Responses requests containing Codex `agent_message` items pass through without consulting Jev,
 with reason `agent_message`. These carry delegated tasks or replies that the router cannot
@@ -570,8 +570,14 @@ Each request also logs one JSON line to stdout, or to `~/.jev-gateway/<client>.l
   a tool anyway, it may produce an incomplete reply and the agent will retry. Raise
   `JEV_MIN_CONFIDENCE` if you see this.
 - In `hint` mode the LLM still does its own reasoning, so the gain is accuracy, not cost.
-- Jev reads text only and has a 32k-token window. Images become placeholders and long conversations
-  keep their newest turns. It is most accurate in English.
+- Jev reads text only and has a 32k-token window. Requests retaining images, files, audio, or opaque
+  references bypass Jev (`multimodal_content`), including media-bearing tool results. Attachments
+  and the provider request stay unchanged; the gateway never downloads them. This replaces the
+  former image-placeholder behavior: an older retained screenshot can reduce routing throughout
+  a long session. The gateway does not assume that the image is no longer relevant. Gemini thought
+  signatures, text-only hosted-tool traces, refusals, and web-search results still permit routing.
+  Nested protocol content is inspected up to 32 levels; deeper content also bypasses. Text-only
+  conversations keep their newest turns. Jev is most accurate in English.
 - The default confidence thresholds are starting points. Use the dashboard and baseline mode to tune
   them for your own work.
 - A gateway started by a launcher has no key of its own, because the one `Authorization` header a

@@ -167,6 +167,7 @@ const CATEGORIES = [
 ];
 // [who made the call, what it means]
 const REASONS = {
+  multimodal_content: ["Jev not asked", "Retained media or opaque content needs the main model; the original request was forwarded unchanged."],
   no_tools: ["Jev not asked", "The request carried no tools, so there was nothing to select."],
   no_messages: ["Jev not asked", "The request had no conversation to decide on."],
   previous_response_id: ["Jev not asked", "The conversation lives upstream (previous_response_id); the router can't see it."],
