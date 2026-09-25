@@ -32,6 +32,8 @@ jev-claude     # use it exactly like `claude`
 jev-opencode   # use it exactly like `opencode` (stable v1)
 jev-gemini     # Gemini CLI, with a Gemini API key
 jev-devin      # use it exactly like `devin`
+jev-kilo       # use it exactly like `kilo`
+jev-qwen       # use it exactly like `qwen`
 ```
 
 **3. Answer two questions, once**
@@ -76,7 +78,7 @@ before. Only sessions started with the `jev-` commands go through the gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-gemini` and `jev-devin`.
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-gemini`, `jev-devin`, `jev-kilo` and `jev-qwen`.
 
 | Command | What it does |
 | --- | --- |
@@ -92,9 +94,9 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-gemini` a
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788 and Devin 8792. Change
-them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`, `JEV_GEMINI_PORT` and
-`JEV_DEVIN_PORT`.
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792, Kilo 8785 and Qwen Code 8787. Change
+them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`, `JEV_GEMINI_PORT`, `JEV_DEVIN_PORT`, `JEV_KILO_PORT` and
+`JEV_QWEN_PORT`.
 
 ## Dashboard
 

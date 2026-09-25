@@ -290,3 +290,93 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
+function kiloUpstream() {
+  return process.env.JEV_KILO_UPSTREAM_BASE_URL ?? "https://api.kilo.ai/api/openrouter";
+}
+
+function kiloModel() {
+  return process.env.JEV_KILO_MODEL ?? "kilo-auto/free";
+}
+
+function kiloInlineConfig(origin) {
+  const model = kiloModel();
+  return {
+    $schema: "https://kilo.ai/config.json",
+    model: `${OPENCODE_PROVIDER}/${model}`,
+    small_model: `${OPENCODE_PROVIDER}/${model}`,
+    provider: {
+      [OPENCODE_PROVIDER]: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Jev Gateway",
+        options: { baseURL: `${origin}/v1`, apiKey: "{env:KILO_API_KEY}" },
+        models: {
+          [model]: {
+            name: `Jev Gateway (${model})`,
+            limit: { context: 200000, output: 65536 },
+            tool_call: true,
+          },
+        },
+      },
+    },
+  };
+}
+
+export const kilo = {
+  name: "jev-kilo",
+  client: "kilo",
+  portEnv: "JEV_KILO_PORT",
+  defaultPort: 8785,
+  upstream: kiloUpstream,
+  upstreamHelp:
+    "JEV_KILO_UPSTREAM_BASE_URL   where Kilo traffic goes (default https://api.kilo.ai/api/openrouter)\n" +
+    "  JEV_KILO_MODEL               model selected as jev-gateway/<model> (default kilo-auto/free)\n" +
+    "  KILO_API_KEY                 your Kilo key, forwarded untouched; unset means free models only",
+  env: (origin) => ({
+    KILO_CONFIG_CONTENT: JSON.stringify(kiloInlineConfig(origin)),
+    PWD: process.cwd(),
+  }),
+  configHelp: (origin) => {
+    const config = kiloInlineConfig(origin);
+    const manual = JSON.stringify({ model: config.model, small_model: config.small_model, provider: config.provider }, null, 2);
+    return (
+      `# Keep the gateway running (jev-kilo --start), then add to kilo.json\n` +
+      `# (project root or ~/.config/kilo/kilo.json):\n` +
+      `${manual}\n` +
+      `# then select it with: kilo --model ${config.model}`
+    );
+  },
+};
+
+function qwenUpstream() {
+  return process.env.JEV_QWEN_UPSTREAM_BASE_URL ?? "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+}
+
+function qwenModel() {
+  return process.env.JEV_QWEN_MODEL ?? "qwen-plus";
+}
+
+export const qwen = {
+  name: "jev-qwen",
+  client: "qwen",
+  portEnv: "JEV_QWEN_PORT",
+  defaultPort: 8787,
+  upstream: qwenUpstream,
+  upstreamHelp:
+    "JEV_QWEN_UPSTREAM_BASE_URL   where Qwen Code traffic goes (default https://dashscope-intl.aliyuncs.com/compatible-mode/v1)\n" +
+    "  JEV_QWEN_MODEL               model selected (default qwen-plus)",
+  args: (origin) => [
+    "--auth-type",
+    "openai",
+    "--openai-base-url",
+    `${origin}/v1`,
+    "--openai-api-key",
+    process.env.OPENAI_API_KEY || "local-no-key",
+    "-m",
+    qwenModel(),
+  ],
+  configHelp: (origin) =>
+    `# Keep the gateway running (jev-qwen --start), then run:\n` +
+    `qwen --auth-type openai --openai-base-url ${origin}/v1 --openai-api-key local-no-key -m ${qwenModel()}`,
+};
+
+

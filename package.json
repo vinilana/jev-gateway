@@ -36,7 +36,9 @@
     "jev-claude": "bin/jev-claude.mjs",
     "jev-opencode": "bin/jev-opencode.mjs",
     "jev-gemini": "bin/jev-gemini.mjs",
-    "jev-devin": "bin/jev-devin.mjs"
+    "jev-devin": "bin/jev-devin.mjs",
+    "jev-kilo": "bin/jev-kilo.mjs",
+    "jev-qwen": "bin/jev-qwen.mjs"
   },
   "files": [
     "dist",
@@ -56,6 +58,8 @@
     "opencode": "node bin/jev-opencode.mjs",
     "gemini": "node bin/jev-gemini.mjs",
     "devin": "node bin/jev-devin.mjs",
+    "kilo": "node bin/jev-kilo.mjs",
+    "qwen": "node bin/jev-qwen.mjs",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
