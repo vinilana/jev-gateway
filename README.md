@@ -559,6 +559,14 @@ runs solved, against 5 of 5 without routing). Measure on your own work before tr
 runs per cell is a small sample. The chart, the spread of the individual runs, the raw data, how
 one run was caught copying from another, and how to run it yourself are in that repository.
 
+A [separate 20-run OpenCode series](https://github.com/vinilana/jev-gateway-bench/tree/main/results/2026-09-23-opencode-opus-5-cliproxy-comparison)
+used Opus 5 on the same tasks. With routing on, median output tokens fell by 62% and time by 79% on
+the bugfix task; on the feature task, output tokens fell by 29% and time by 31%. All 20 runs passed
+every hidden check. That series used forced tools through Chat Completions and a local CLI Proxy
+API, while the Claude Code runs used hints through Anthropic Messages and a claude.ai
+subscription. Gateway version, Jev provider, tool roster and run date differed too, so the
+comparison does not isolate the harness as the cause. Five runs per cell is a small sample.
+
 ## Development
 
 ```bash
