@@ -5,8 +5,7 @@
     "keyEnv": "TYPESAFE_API_KEY",
     "keyUrl": "https://typesafe.ai",
     "url": "https://api.typesafe.ai/v1/systemone",
-    "model": "jev-latest",
-    "models": ["jev-latest", "jev-1.13.0"]
+    "model": "jev-latest"
   },
   "openrouter": {
     "label": "OpenRouter",
@@ -14,8 +13,7 @@
     "keyEnv": "OPENROUTER_API_KEY",
     "keyUrl": "https://openrouter.ai/settings/keys",
     "url": "https://openrouter.ai/api/alpha/decisions",
-    "model": "typesafe/jev-1.13",
-    "models": ["typesafe/jev-1.13", "typesafe/jev-1.13-20260917"]
+    "model": "typesafe/jev-1.13"
   },
   "vercel": {
     "label": "Vercel AI Gateway",
@@ -23,8 +21,7 @@
     "keyEnv": "AI_GATEWAY_API_KEY",
     "keyUrl": "https://vercel.com/dashboard/ai-gateway/api-keys",
     "url": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
-    "model": "typesafe-ai/jev",
-    "models": ["typesafe-ai/jev"]
+    "model": "typesafe-ai/jev"
   },
   "opencode": {
     "label": "OpenCode",

@@ -11,7 +11,8 @@ interface Provider {
   keyUrl: string;
   url: string;
   model: string;
-  models: string[];
+  /** Only providers that must refuse unlisted ids have a list: the rest tell theirs apart by a slash. */
+  models?: string[];
   /** A paid model setup can offer only with the user's consent. */
   paidModel?: string;
 }
@@ -40,11 +41,18 @@ export function resolveProvider(env: Env): ProviderId {
 }
 
 /**
- * A JEV_MODEL written for one provider is ignored under another. TypeSafe and OpenCode both use
- * slashless ids, so the provider's accepted list decides rather than the presence of a slash.
+ * Model ids live in different namespaces: TypeSafe's have no slash (`jev-latest`), the gateways'
+ * do (`typesafe/jev-1.13`). A JEV_MODEL written for one provider is ignored under another, so
+ * switching provider never sends an id the new one cannot know. OpenCode's ids have no slash
+ * either, so OpenCode accepts only its listed ids, and a setting written for TypeSafe never
+ * selects its paid model. The others take any id of their shape, so a new model needs no release.
  */
 export function resolveModel(provider: ProviderId, requested: string | undefined): string {
-  return requested && providers[provider].models.includes(requested) ? requested : providers[provider].model;
+  const { model, models } = providers[provider];
+  if (!requested) return model;
+  if (models) return models.includes(requested) ? requested : model;
+  const fits = requested.includes("/") === (provider !== "typesafe") && !providers.opencode.models?.includes(requested);
+  return fits ? requested : model;
 }
 
 /**
@@ -106,7 +114,7 @@ export function createAskJev(
     return normalize((await response.json()) as SystemOneResult<Questions>);
   };
   // One fast retry only: past that, failing open to the LLM is quicker.
-  const attempt = async (request: SystemOneRequest<Questions>) => {
+  return async (request) => {
     try {
       return await once(request);
     } catch (error) {
@@ -116,5 +124,4 @@ export function createAskJev(
       return once(request);
     }
   };
-  return attempt;
 }
