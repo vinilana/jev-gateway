@@ -296,11 +296,10 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     return response;
   });
 
-  // Every other endpoint — the rest of exa (seat management, model catalogue, analytics) and
-  // anything an unrecognized client asks for — is proxied opaque. Dashboard misses are this
-  // gateway's, not upstream's: forwarding one would send its ?key= credential along.
+  // The rest of exa (seat management, model catalogue, analytics) is proxied opaque. Only exa:
+  // any other unknown path stays a 404 here rather than reaching upstream with the client's key.
   app.all("/*", async (c) => {
-    if (c.req.path === "/dashboard" || c.req.path.startsWith("/dashboard/")) return c.notFound();
+    if (!c.req.path.startsWith("/exa.")) return c.notFound();
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;

@@ -126,7 +126,7 @@ describe("the exa route", () => {
 });
 
 describe("the catch-all forward", () => {
-  it("proxies other exa endpoints and arbitrary paths untouched", async () => {
+  it("proxies other exa endpoints untouched, and nothing else", async () => {
     const upstream = rawUpstream(Uint8Array.of(9, 9, 9));
     const target = app(fakeJev({}).askJev, upstream.fetchImpl);
     const seat = await target.request("/exa.seat_management_pb.SeatManagementService/GetUserStatus", {
@@ -137,8 +137,8 @@ describe("the catch-all forward", () => {
     expect(seat.status).toBe(200);
     expect(upstream.calls[0]?.url).toBe("https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus");
     const misc = await target.request("/favicon.ico");
-    expect(misc.status).toBe(200);
-    expect(upstream.calls[1]?.url).toBe("https://server.codeium.com/favicon.ico");
+    expect(misc.status).toBe(404);
+    expect(upstream.calls).toHaveLength(1);
   });
 
   it("never forwards dashboard misses — and their ?key= — upstream", async () => {
