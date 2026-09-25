@@ -273,6 +273,57 @@ export const devin = {
     `#   WINDSURF_API_SERVER_URL=${origin} devin\n`,
 };
 
+function kiloUpstream() {
+  return process.env.JEV_KILO_UPSTREAM_BASE_URL ?? "https://api.kilo.ai/api/openrouter";
+}
+
+function kiloModel() {
+  return process.env.JEV_KILO_MODEL ?? "kilo-auto/free";
+}
+
+// Kilo's built-in `kilo` provider cannot be reused: it appends `/openrouter/` to any base URL, which
+// misses the routed endpoint. So Kilo gets a provider of its own, and the user's key reaches it
+// through `{env:KILO_API_KEY}`, which Kilo expands itself, so the key never enters the config.
+function kiloInlineConfig(origin) {
+  const model = kiloModel();
+  return {
+    $schema: "https://kilo.ai/config.json",
+    model: `${OPENCODE_PROVIDER}/${model}`,
+    small_model: `${OPENCODE_PROVIDER}/${model}`,
+    provider: {
+      [OPENCODE_PROVIDER]: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Jev Gateway",
+        options: { baseURL: `${origin}/v1`, apiKey: "{env:KILO_API_KEY}" },
+        models: { [model]: { name: `Jev Gateway (${model})` } },
+      },
+    },
+  };
+}
+
+export const kilo = {
+  name: "jev-kilo",
+  client: "kilo",
+  portEnv: "JEV_KILO_PORT",
+  defaultPort: 8793,
+  upstream: kiloUpstream,
+  upstreamHelp:
+    "JEV_KILO_UPSTREAM_BASE_URL   where Kilo traffic goes (default https://api.kilo.ai/api/openrouter)\n" +
+    "JEV_KILO_MODEL               model selected as jev-gateway/<model> (default kilo-auto/free)\n" +
+    "KILO_API_KEY                 your Kilo key, forwarded untouched; unset means free models only",
+  env: (origin) => ({ KILO_CONFIG_CONTENT: JSON.stringify(kiloInlineConfig(origin)) }),
+  configHelp: (origin) => {
+    const config = kiloInlineConfig(origin);
+    const manual = JSON.stringify({ model: config.model, small_model: config.small_model, provider: config.provider }, null, 2);
+    return (
+      `# Keep the gateway running (jev-kilo --start), then add to kilo.jsonc\n` +
+      `# (project root or ~/.config/kilo/kilo.jsonc):\n` +
+      `${manual}\n` +
+      `# then select it with: kilo --model ${config.model}`
+    );
+  },
+};
+
 export const gemini = {
   name: "jev-gemini",
   client: "gemini",
