@@ -396,15 +396,20 @@ so the gateway decodes `POST /exa.api_server_pb.ApiServerService/GetChatMessage`
 reads the messages and tools out of the wire fields, and re-encodes whatever it changed. There is
 no `tool_choice` on this wire, so steering is always `hint` — a suggestion appended as one more
 message — while `direct` synthesizes the Connect stream an upstream answer would have had. Every
-other `exa.*` endpoint (seat management, model configuration, analytics) and every other path is
-proxied opaque. Token usage is read back out of the stream's stats fields, so the dashboard meters
-Devin traffic like any other client's.
+other `exa.*` endpoint (seat management, model configuration, analytics) is proxied opaque. Token
+usage is read back out of the stream's stats fields, so the dashboard meters Devin traffic like any
+other client's.
 
 Verified end to end on Devin CLI 3000.11.3: a `hint` rewrite was accepted upstream, a `direct`
 answer was executed by the CLI, and the following turn — whose history carries the unsealed
 synthetic call — was accepted, so the server does not enforce the `sealed` field on history.
 `devin -p` and the interactive TUI share the same backend, so both go through the gateway. Other
 versions were not tested; anything the decoder cannot read fails open to passthrough.
+
+One safety net does not reach Devin. Elsewhere, when the upstream refuses a rewritten request with
+400 or 422, the gateway sends the original instead. Connect streams report errors inside the
+stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. Set
+`JEV_ROUTING=off` or run `devin` directly if that happens.
 
 ## Running it as a server for your own app
 

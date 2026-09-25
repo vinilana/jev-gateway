@@ -155,6 +155,10 @@ function directStream(_req: ExaRequest, call: DirectCall): { body: Uint8Array<Ar
 
 // Connect is always streamed; the route only asks for JSON when `stream` is falsy, which never
 // happens for an ExaRequest.
-const directJson = () => ({ stream: true });
+// Connect server-streaming has no unary form: reaching this is a bug, and throwing makes the
+// request fail open to passthrough.
+const directJson = (): never => {
+  throw new Error("exa has no non-streaming reply");
+};
 
 export const exaAdapter: Adapter<ExaRequest> = { parse, encode, toInput, apply, directJson, directStream };
