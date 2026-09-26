@@ -184,8 +184,8 @@ confirms that the paid model answered the check; the account's billing history w
 The unavailable-free-model behavior and setup consent flow remain test-only because the free model
 still answers. The OpenRouter and Vercel paths follow those providers' published endpoints and are
 covered by tests, but have not been run with real keys yet. The first-run key check will tell you
-at once if one of them disagrees. The Jev AI path follows jev-ai.pro's published API reference and
-is covered by tests, but has not been run with a real key yet.
+at once if one of them disagrees. On 2026-09-26, the setup key check
+succeeded with a real Jev AI key against `jev-ai.pro`.
 
 ## Using it with Codex
 
