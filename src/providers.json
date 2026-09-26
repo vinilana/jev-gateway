@@ -32,5 +32,13 @@
     "model": "jev-1.13-free",
     "models": ["jev-1.13-free", "jev-1.13"],
     "paidModel": "jev-1.13"
+  },
+  "jevai": {
+    "label": "Jev AI",
+    "note": "Jev through a jev-ai.pro key, an independent reseller of TypeSafe's API",
+    "keyEnv": "JEV_AI_API_KEY",
+    "keyUrl": "https://jev-ai.pro/jev-api#api-keys",
+    "url": "https://jev-ai.pro/api/v1/systemone",
+    "model": "jev-latest"
   }
 }
