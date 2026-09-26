@@ -21,8 +21,8 @@ const lights = {
   "stated:1:brightness": { noul: 0.04 },
 };
 
-function setup(askJev: AskJev, config = testConfig()) {
-  const app = createApp({ config, askJev, fetch: fakeUpstream().fetchImpl });
+function setup(askJev: AskJev, config = testConfig(), upstreamReply?: unknown) {
+  const app = createApp({ config, askJev, fetch: fakeUpstream(upstreamReply).fetchImpl });
   const post = (path: string, body: unknown) =>
     app.request(path, {
       method: "POST",
@@ -88,6 +88,24 @@ describe("GET /dashboard/events", () => {
       tools: [{ name: "Bash", description: "Run a shell command.", input_schema: { type: "object", properties: { command: { type: "string" } } } }],
     });
     expect((await feed()).events[0]).toMatchObject({ mode: "hint", tool: "Bash", path: "/v1/messages" });
+  });
+
+  it("shows which model actually served the request, when an upstream router served a different one", async () => {
+    const { post, feed } = setup(
+      fakeJev({ ...lights, tool: { choice: "get_weather" } }).askJev,
+      undefined,
+      { model: "claude-haiku-4-5-20251001", choices: [{ message: { role: "assistant" }, finish_reason: "stop" }] },
+    );
+    await post("/v1/chat/completions", chat("what's the weather?", { model: "jevonian/auto" }));
+    expect((await feed()).events[0]).toMatchObject({ model: "jevonian/auto", servedModel: "claude-haiku-4-5-20251001" });
+  });
+
+  it("leaves servedModel unset when the upstream serves the model that was asked for", async () => {
+    const { post, feed } = setup(fakeJev({ ...lights, tool: { choice: "get_weather" } }).askJev, undefined, { model: "gpt-test", choices: [] });
+    await post("/v1/chat/completions", chat("what's the weather?"));
+    const event = (await feed()).events[0];
+    expect(event?.model).toBe("gpt-test");
+    expect(event?.servedModel).toBeUndefined();
   });
 
   it("exposes metadata only: no prompt, no tool arguments, no credentials", async () => {

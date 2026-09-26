@@ -139,3 +139,57 @@ export async function readUsage(response: Response): Promise<Usage | undefined> 
   if (found.input === undefined && found.output === undefined) return undefined;
   return { input: 0, output: 0, cached: 0, cacheWrite: 0, reasoning: 0, ...found };
 }
+
+/**
+ * Read a reply until it says which model actually served it. An upstream that is itself a router
+ * (OpenRouter, a local proxy such as Jevonian, LiteLLM) can serve a request made for one model id
+ * with a different one, and every wire format this gateway understands echoes back the model that
+ * served it, in the same places `collect` already reads `usage` from: top level (JSON replies,
+ * chat chunks), `response` (Responses events), or `message` (Anthropic's `message_start`). That
+ * served model, not the one asked for, is what the dashboard's Model column should show.
+ *
+ * Works on a clone, like `readUsage`, with the same streaming-or-plain-JSON detection — but stops
+ * at the first model found instead of reading to the end, since the model never changes mid-reply.
+ */
+export async function readServedModel(response: Response): Promise<string | undefined> {
+  // exa's wire is binary and does not carry a model string worth decoding for this.
+  if (response.headers.get("content-type")?.includes("connect+proto")) return undefined;
+  const find = (payload: unknown): string | undefined => {
+    const root = obj(payload);
+    for (const holder of [root, obj(root.response), obj(root.message)]) {
+      if (typeof holder.model === "string" && holder.model) return holder.model;
+    }
+    return undefined;
+  };
+  let streaming: boolean | undefined;
+  let pending = "";
+  const scan = (line: string): string | undefined => {
+    // Most stream events carry no model at all; only a `data:` line that mentions one is worth parsing.
+    if (!line.startsWith("data:") || !line.includes('"model"')) return undefined;
+    try {
+      return find(JSON.parse(line.slice(5)));
+    } catch {
+      return undefined; // a line cut short by the client hanging up
+    }
+  };
+  try {
+    for await (const chunk of response.body?.pipeThrough(new TextDecoderStream()) ?? []) {
+      pending += chunk;
+      streaming ??= /^\s*$/.test(pending) ? undefined : !/^\s*[{[]/.test(pending);
+      if (!streaming) continue;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        const model = scan(line);
+        if (model) return model;
+      }
+    }
+  } catch {
+    // Aborted mid-stream: fall through to whatever is left in `pending` below.
+  }
+  try {
+    return streaming ? scan(pending) : find(JSON.parse(pending));
+  } catch {
+    return undefined;
+  }
+}

@@ -92,6 +92,7 @@
   th:last-child, td:last-child { padding-right: 16px; }
   td.num, th.num { text-align: right; }
   td.reason-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+  .model-req { color: var(--muted); }
   tr.before td { opacity: 0.55; }
   tbody tr:hover td { background: var(--wash); }
   .note { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
@@ -445,7 +446,9 @@ function renderRows(events) {
       h("td", {}, clock(at(event), new Date(at(event)).toDateString() !== today)),
       h("td", {}, event.client),
       h("td", {}, event.path),
-      h("td", {}, event.model ?? "–"),
+      h("td", { title: event.servedModel ? `requested as ${event.model}` : undefined },
+        event.servedModel ?? event.model ?? "–",
+        event.servedModel ? h("span", { class: "model-req" }, ` (${event.model})`) : undefined),
       h("td", { class: "num" }, String(event.tools)),
       h("td", {}, h("i", { class: `dot c-${name}` }), event.mode),
       h("td", {}, event.tool ?? (event.jev && event.mode === "passthrough" ? `(${event.jev.choice})` : "–")),
@@ -457,7 +460,7 @@ function renderRows(events) {
       h("td", { class: "num", title: event.usage ? `${int(event.usage.reasoning)} reasoning` : undefined }, event.usage ? int(event.usage.output) : "–"),
       h("td", { class: "num" }, event.durationMs === undefined ? "–" : (event.durationMs / 1000).toFixed(1)));
   }));
-  $("note").textContent = `Newest first, up to ${MAX_ROWS}. Dimmed rows are from before the router's last restart; a tool in brackets is what Jev picked when the LLM still made the call. A request appears once its reply has finished, which is when the provider reports its tokens (hover In/Out for cache and reasoning).`;
+  $("note").textContent = `Newest first, up to ${MAX_ROWS}. Dimmed rows are from before the router's last restart; a tool in brackets is what Jev picked when the LLM still made the call. Model is what the provider's reply said it actually used, with what was asked for in parentheses when an upstream router served a different one. A request appears once its reply has finished, which is when the provider reports its tokens (hover In/Out for cache and reasoning).`;
 }
 
 function renderControls() {

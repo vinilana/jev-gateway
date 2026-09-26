@@ -10,6 +10,8 @@ export interface RouteEvent {
   time: string;
   path: string;
   model?: string;
+  /** What the provider's reply said it actually used, when that differs from `model`. */
+  servedModel?: string;
   tools: number;
   mode: string;
   reason?: string;
@@ -50,6 +52,7 @@ function toEvent(entry: Record<string, unknown>, seq: number): RouteEvent | unde
     time: text(entry.time) ?? new Date().toISOString(),
     path: text(entry.path) ?? "",
     model: text(entry.model),
+    servedModel: text(entry.servedModel),
     tools: number(entry.tools) ?? 0,
     mode,
     reason: text(entry.reason),
