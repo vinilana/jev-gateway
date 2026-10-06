@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/vinilana/jev-gateway/compare/v0.5.0...v0.5.1) (2026-10-06)
+
+
+### Fixed
+
+* **codex:** let Codex's automatic reviewer choose its own tools ([#56](https://github.com/vinilana/jev-gateway/issues/56)) ([204d6d5](https://github.com/vinilana/jev-gateway/commit/204d6d514fee8032242f0f16d0a0b975d5f81728))
+
 ## [0.5.0](https://github.com/vinilana/jev-gateway/compare/v0.4.3...v0.5.0) (2026-09-25)
 
 
