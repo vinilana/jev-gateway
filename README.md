@@ -14,8 +14,8 @@ OpenAI, Anthropic or Google Gemini APIs.
 
 ## Quick start
 
-You need Node.js 22.15 or newer, a key for Jev (from TypeSafe, OpenRouter, Vercel AI Gateway or
-OpenCode, see [Where Jev runs](#where-jev-runs)), and Codex, Claude Code, OpenCode, Kilo and/or
+You need Node.js 22.15 or newer, a key for Jev (from TypeSafe, OpenRouter, Vercel AI Gateway,
+OpenCode or Jev AI, see [Where Jev runs](#where-jev-runs)), and Codex, Claude Code, OpenCode, Kilo and/or
 Devin already installed and logged in.
 
 **1. Install**
@@ -47,7 +47,8 @@ Where do you want to reach Jev?
   2) OpenRouter: Jev through your OpenRouter account and credits
   3) Vercel AI Gateway: Jev through your Vercel AI Gateway key and billing
   4) OpenCode: Jev through your OpenCode Zen key: free by default, paid only if selected
-Choose 1-4 [1]:
+  5) Jev AI: Jev through a jev-ai.pro key, an independent reseller of TypeSafe's API
+Choose 1-5 [1]:
 Paste your TypeSafe API key (input is hidden):
 The key works (Jev answered in 712 ms).
 ```
@@ -143,7 +144,7 @@ is only meaningful if you do similar work in both states.
 
 ## Where Jev runs
 
-Jev is served by TypeSafe and by three gateways that resell it. All four take the same questions
+Jev is served by TypeSafe and by four services that resell it. All five take the same questions
 and return the same answers, so the choice is about whose account and billing you want to use.
 
 | Provider | Key variable | Default model | Get a key |
@@ -152,12 +153,20 @@ and return the same answers, so the choice is about whose account and billing yo
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` | [Vercel dashboard](https://vercel.com/dashboard/ai-gateway/api-keys) |
 | OpenCode | `OPENCODE_API_KEY` | `jev-1.13-free` | [OpenCode Zen](https://opencode.ai/auth) |
+| Jev AI | `JEV_AI_API_KEY` | `jev-latest` | [jev-ai.pro](https://jev-ai.pro/jev-api#api-keys) |
 
 OpenCode serves two ids at the same endpoint: `jev-1.13-free` (free,
 [for a limited time](https://opencode.ai/docs/zen/#jev)) and the paid `jev-1.13`. The gateway
 defaults to the free one. If OpenCode says the free model is gone (404 or 410), the request goes
 to the LLM unchanged. The reason names `JEV_MODEL=jev-1.13`, which opts into the paid model.
 The setup wizard offers to save that setting if only the paid model answers its key check.
+
+Jev AI ([jev-ai.pro](https://jev-ai.pro)) is an independent service, not TypeSafe, with its own
+keys and balance. Its API copies TypeSafe's, model ids included, so `JEV_MODEL` takes the same
+values as for TypeSafe. A Jev AI key works only at `https://jev-ai.pro/api/v1/systemone`: choose
+Jev AI in setup rather than pasting the key as a TypeSafe key, which sends it to TypeSafe and is
+refused. Jev AI also serves Laya models, but their input limit (512 or 1,024 tokens) is far below
+what the gateway sends, so keep a Jev model.
 
 `jev-codex --setup` (or any other launcher) switches between them and restarts the gateway with the
 new key. To configure it by hand instead, put `JEV_PROVIDER` and the matching key in
@@ -175,7 +184,8 @@ confirms that the paid model answered the check; the account's billing history w
 The unavailable-free-model behavior and setup consent flow remain test-only because the free model
 still answers. The OpenRouter and Vercel paths follow those providers' published endpoints and are
 covered by tests, but have not been run with real keys yet. The first-run key check will tell you
-at once if one of them disagrees.
+at once if one of them disagrees. On 2026-09-26, the setup key check
+succeeded with a real Jev AI key against `jev-ai.pro`.
 
 ## Using it with Codex
 
@@ -553,8 +563,8 @@ list. The ones worth knowing:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY` or `OPENCODE_API_KEY` | one is required | The key for Jev; the launchers ask for it on first run |
-| `JEV_PROVIDER` | whichever key is set | `typesafe`, `openrouter`, `vercel` or `opencode` |
+| `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`, `OPENCODE_API_KEY` or `JEV_AI_API_KEY` | one is required | The key for Jev; the launchers ask for it on first run |
+| `JEV_PROVIDER` | whichever key is set | `typesafe`, `openrouter`, `vercel`, `opencode` or `jevai` |
 | `JEV_MIN_CONFIDENCE` | `0.7` | Below this confidence, the LLM decides. Lower it to route more, raise it to be more careful |
 | `JEV_ARG_MIN_CERTAINTY` | `0.8` | Every argument must reach this for a `direct` answer |
 | `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM |

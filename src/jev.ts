@@ -41,17 +41,17 @@ export function resolveProvider(env: Env): ProviderId {
 }
 
 /**
- * Model ids live in different namespaces: TypeSafe's have no slash (`jev-latest`), the gateways'
- * do (`typesafe/jev-1.13`). A JEV_MODEL written for one provider is ignored under another, so
- * switching provider never sends an id the new one cannot know. OpenCode's ids have no slash
- * either, so OpenCode accepts only its listed ids, and a setting written for TypeSafe never
- * selects its paid model. The others take any id of their shape, so a new model needs no release.
+ * Model ids live in different namespaces: TypeSafe's and Jev AI's have no slash (`jev-latest`),
+ * the other gateways' do (`typesafe/jev-1.13`). A JEV_MODEL written for one provider is ignored
+ * under another, so switching provider never sends an id the new one cannot know. OpenCode's ids
+ * have no slash either, so OpenCode accepts only its listed ids, and a setting written for TypeSafe
+ * never selects its paid model. The others take any id of their shape, so a new model needs no release.
  */
 export function resolveModel(provider: ProviderId, requested: string | undefined): string {
   const { model, models } = providers[provider];
   if (!requested) return model;
   if (models) return models.includes(requested) ? requested : model;
-  const fits = requested.includes("/") === (provider !== "typesafe") && !providers.opencode.models?.includes(requested);
+  const fits = requested.includes("/") === model.includes("/") && !providers.opencode.models?.includes(requested);
   return fits ? requested : model;
 }
 

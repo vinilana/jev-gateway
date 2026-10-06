@@ -55,6 +55,18 @@ describe("runSetup", () => {
     expect(user.printed.join("\n")).not.toContain("or-key");
   });
 
+  it("saves a Jev AI key under its own variable", async () => {
+    const user = script(["5", "ja-key"]);
+    const checked: string[] = [];
+    const values = await runSetup({
+      name: "jev-claude", providers, envFile, io: user.io, save: () => {},
+      validate: async (provider: { label: string }) => (checked.push(provider.label), { ok: true, ms: 9 }),
+    });
+    expect(values).toEqual({ JEV_PROVIDER: "jevai", JEV_AI_API_KEY: "ja-key" });
+    expect(checked).toEqual(["Jev AI"]);
+    expect(user.printed.join("\n")).toContain("https://jev-ai.pro/jev-api#api-keys");
+  });
+
   it("defaults to TypeSafe and lets a refused key be retried", async () => {
     const user = script(["", "wrong", "right"]);
     const values = await runSetup({
@@ -119,6 +131,13 @@ describe("validateKey", () => {
     expect(await validateKey(providers.typesafe, "k", reply(503))).toMatchObject({ ok: false, refused: false });
     const down = (async () => Promise.reject(new Error("fetch failed"))) as unknown as typeof fetch;
     expect(await validateKey(providers.openrouter, "k", down)).toMatchObject({ ok: false, refused: false, reason: "fetch failed" });
+  });
+
+  it("checks a Jev AI key at jev-ai.pro, where it belongs", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => (urls.push(url), new Response("{}", { status: 200 }))) as unknown as typeof fetch;
+    expect(await validateKey(providers.jevai, "k", fetchImpl)).toMatchObject({ ok: true });
+    expect(urls).toEqual(["https://jev-ai.pro/api/v1/systemone"]);
   });
 
   it("reports a missing free model without calling the paid one", async () => {
