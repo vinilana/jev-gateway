@@ -87,7 +87,7 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `j
 | `jev-codex --dashboard` | Open the monitoring dashboard in your browser |
 | `jev-codex --routing off` | Baseline mode: stop asking Jev, keep counting tokens |
 | `jev-codex --routing on` | Let Jev decide again |
-| `jev-codex --status` | Is the gateway running, and where does it forward to? |
+| `jev-codex --status` | Check local gateway health and show server/CLI configuration |
 | `jev-codex --logs` | Follow routing decisions live (use a second terminal) |
 | `jev-codex --start` | Start the gateway without opening the agent |
 | `jev-codex --stop` | Stop the background gateway (close your sessions first) |
@@ -98,6 +98,10 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `j
 Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792 and Kilo
 8793. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
 `JEV_GEMINI_PORT`, `JEV_DEVIN_PORT` and `JEV_KILO_PORT`.
+
+`--status` checks local gateway health through `/health` and shows the server's Jev provider
+separately from the key configured in the CLI's environment. It never calls the provider, so a
+healthy gateway and a configured key do not confirm Jev authentication.
 
 ## Dashboard
 
