@@ -32,5 +32,34 @@
     "model": "jev-1.13-free",
     "models": ["jev-1.13-free", "jev-1.13"],
     "paidModel": "jev-1.13"
+  },
+  "clef": {
+    "label": "Cloudflare Clef",
+    "note": "Clef 27B through Workers AI",
+    "keyEnv": "CLOUDFLARE_API_TOKEN",
+    "keyUrl": "https://dash.cloudflare.com/profile/api-tokens",
+    "accountEnv": "CLOUDFLARE_ACCOUNT_ID",
+    "url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/cloudflare/clef",
+    "model": "clef",
+    "models": ["clef"]
+  },
+  "clef-flash": {
+    "label": "Cloudflare Clef-flash",
+    "note": "Clef-flash 9B through Workers AI",
+    "keyEnv": "CLOUDFLARE_API_TOKEN",
+    "keyUrl": "https://dash.cloudflare.com/profile/api-tokens",
+    "accountEnv": "CLOUDFLARE_ACCOUNT_ID",
+    "url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/cloudflare/clef-flash",
+    "model": "clef-flash",
+    "models": ["clef-flash"]
+  },
+  "local": {
+    "label": "Local Clef (Ollama / llama.cpp)",
+    "note": "Clef or Clef-flash on your machine, no API key required",
+    "keyEnv": "LOCAL_CLEF_API_KEY",
+    "keyOptional": true,
+    "keyUrl": "https://ollama.com/library/clef-flash",
+    "url": "http://127.0.0.1:11434/v1/systemone",
+    "model": "clef-flash"
   }
 }

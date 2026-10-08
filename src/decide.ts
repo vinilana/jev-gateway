@@ -107,7 +107,7 @@ async function shortlist(
   config: Config,
   askJev: AskJev,
 ): Promise<{ tools: RouterTool[]; inputTokens: number }> {
-  const { questions, shards } = buildShortlistQuestions(tools);
+  const { questions, shards } = buildShortlistQuestions(tools, config.jevProvider === "local" ? 25 : MAX_TOOLS);
   const result = await askJev({ state, questions, model: config.jevModel });
   const kept = shards.flatMap((shard, index) => {
     const answer = result.answers[shardKey(index)];
@@ -133,13 +133,17 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
   let result: SystemOneResult<Questions>;
   let plans: ToolPlan[];
   try {
-    if (tools.length > MAX_TOOLS) {
-      ({ tools, inputTokens: shortlistTokens } = await shortlist(tools, state, config, askJev));
+    const maxTools = config.jevProvider === "local" ? 25 : MAX_TOOLS;
+    while (tools.length > maxTools) {
+      const shortlisted = await shortlist(tools, state, config, askJev);
+      tools = shortlisted.tools;
+      shortlistTokens += shortlisted.inputTokens;
       if (tools.length === 0) return { mode: "passthrough", reason: "jev_unexpected_answer" };
     }
     const built = buildQuestions(tools, {
       allowNone: input.toolChoice !== "required",
       withArgs: config.directCalls,
+      ...(config.jevProvider === "local" ? { maxOptions: 26 } : {}),
     });
     plans = built.plans;
     result = await askJev({ state, questions: built.questions, model: config.jevModel });

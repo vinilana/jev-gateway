@@ -8,7 +8,9 @@ interface Provider {
   label: string;
   note: string;
   keyEnv: string;
+  keyOptional?: boolean;
   keyUrl: string;
+  accountEnv?: string;
   url: string;
   model: string;
   /** Only providers that must refuse unlisted ids have a list: the rest tell theirs apart by a slash. */
@@ -50,6 +52,7 @@ export function resolveProvider(env: Env): ProviderId {
 export function resolveModel(provider: ProviderId, requested: string | undefined): string {
   const { model, models } = providers[provider];
   if (!requested) return model;
+  if (provider === "local") return /^(clef|clef-flash)(:[^\s/]+)?$/.test(requested) ? requested : model;
   if (models) return models.includes(requested) ? requested : model;
   const fits = requested.includes("/") === (provider !== "typesafe") && !providers.opencode.models?.includes(requested);
   return fits ? requested : model;
@@ -62,15 +65,26 @@ export function resolveModel(provider: ProviderId, requested: string | undefined
 export function resolveUrl(provider: ProviderId, env: Env): string {
   const explicit = env.JEV_URL?.trim();
   if (explicit) return explicit;
+  if (provider === "local") return env.LOCAL_CLEF_URL?.trim() || providers.local.url;
   const base = provider === "typesafe" ? env.TYPESAFE_BASE_URL?.trim() : undefined;
-  return base ? `${base.replace(/\/+$/, "")}/v1/systemone` : providers[provider].url;
+  if (base) return `${base.replace(/\/+$/, "")}/v1/systemone`;
+  const accountEnv = providers[provider].accountEnv;
+  if (accountEnv) {
+    const accountId = env[accountEnv]?.trim();
+    if (!accountId) throw new Error(`${accountEnv} is required when JEV_PROVIDER=${provider}`);
+    return providers[provider].url.replace("{account_id}", encodeURIComponent(accountId));
+  }
+  return providers[provider].url;
 }
 
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504, 529]);
 const MODEL_GONE = new Set([404, 410]);
 
 /** Some gateways return choice answers without a confidence; the winning probability stands in. */
-function normalize(result: SystemOneResult<Questions>): SystemOneResult<Questions> {
+function normalize(result: SystemOneResult<Questions> | { result: SystemOneResult<Questions> }): SystemOneResult<Questions> {
+  if (!result || typeof result !== "object") throw new Error("Invalid decision response");
+  if ("result" in result) result = result.result;
+  if (!result || typeof result !== "object") throw new Error("Invalid decision response");
   const answers: Record<string, unknown> = {};
   for (const [name, answer] of Object.entries(result.answers ?? {})) {
     const probabilities = "probabilities" in answer ? Object.values(answer.probabilities as Record<string, number>) : [];
@@ -82,26 +96,29 @@ function normalize(result: SystemOneResult<Questions>): SystemOneResult<Question
   return { model: result.model, answers, usage: { input_tokens: result.usage?.input_tokens ?? 0, output_tokens: result.usage?.output_tokens ?? 0 } } as SystemOneResult<Questions>;
 }
 
-/** The one call the gateway makes to Jev, for whichever provider is configured. */
+/** The one call the gateway makes to its decision provider. */
 export function createAskJev(
   config: Pick<Config, "jevProvider" | "jevApiKey" | "jevUrl" | "jevTimeoutMs">,
   fetchImpl: typeof fetch = fetch,
 ): AskJev {
   const provider = providers[config.jevProvider];
-  if (!config.jevApiKey) {
+  if (!config.jevApiKey && !provider.keyOptional) {
     throw new Error(`No API key for Jev: set ${provider.keyEnv} (${provider.label}), or run jev-codex --setup.`);
   }
   const once = async (request: SystemOneRequest<Questions>) => {
+    // Workers AI restricts question IDs; keep the router's IDs out of its wire format.
+    const ids = provider.accountEnv ? Object.keys(request.questions) : undefined;
+    const questions = ids ? Object.fromEntries(ids.map((id, index) => [`q${index}`, request.questions[id]])) : request.questions;
     const response = await fetchImpl(config.jevUrl, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${config.jevApiKey}`,
+        ...(config.jevApiKey ? { authorization: `Bearer ${config.jevApiKey}` } : {}),
         "content-type": "application/json",
         // OpenRouter attributes traffic by these; the others ignore them.
         "http-referer": "https://github.com/vinilana/jev-gateway",
         "x-title": "jev-gateway",
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, questions }),
       signal: AbortSignal.timeout(config.jevTimeoutMs),
     });
     if (!response.ok) {
@@ -111,10 +128,15 @@ export function createAskJev(
         : "";
       throw Object.assign(new Error(`${response.status} from ${provider.label}: ${paidHint}${detail}`), { status: response.status });
     }
-    return normalize((await response.json()) as SystemOneResult<Questions>);
+    const result = normalize(await response.json());
+    if (!ids) return result;
+    return { ...result, answers: Object.fromEntries(ids.flatMap((id, index) => {
+      const answer = result.answers[`q${index}`];
+      return answer ? [[id, answer]] : [];
+    })) };
   };
   // One fast retry only: past that, failing open to the LLM is quicker.
-  return async (request) => {
+  const ask: AskJev = async (request) => {
     try {
       return await once(request);
     } catch (error) {
@@ -123,5 +145,40 @@ export function createAskJev(
       await new Promise((done) => setTimeout(done, 100));
       return once(request);
     }
+  };
+  if (config.jevProvider !== "local" && !provider.accountEnv) return ask;
+
+  // Ollama and Workers AI cap questions at 64; repeat the shared state per batch.
+  return async (request) => {
+    const batches: Questions[] = [];
+    let questions: Questions = {};
+    const maxBytes = config.jevProvider === "local" ? 65_536 : 13 * 1024 * 1024;
+    const fits = (batch: Questions) => Object.keys(batch).length <= 64
+      && new TextEncoder().encode(JSON.stringify({ ...request, questions: batch })).length <= maxBytes;
+    for (const [id, question] of Object.entries(request.questions)) {
+      const next = { ...questions, [id]: question };
+      if (fits(next)) questions = next;
+      else {
+        if (!fits({ [id]: question })) {
+          const limit = config.jevProvider === "local" ? "64 KiB" : "13 MiB";
+          throw new Error(`${provider.label} request exceeds its ${limit} limit; reduce JEV_MAX_STATE_CHARS or tool descriptions.`);
+        }
+        batches.push(questions);
+        questions = { [id]: question };
+      }
+    }
+    batches.push(questions);
+    const answers: SystemOneResult<Questions>["answers"] = {};
+    let model = request.model ?? provider.model;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const batch of batches) {
+      const result = await ask({ ...request, questions: batch });
+      model = result.model;
+      Object.assign(answers, result.answers);
+      inputTokens += result.usage.input_tokens;
+      outputTokens += result.usage.output_tokens;
+    }
+    return { model, answers, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
   };
 }

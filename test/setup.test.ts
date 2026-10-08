@@ -27,16 +27,86 @@ describe("upsertEnv", () => {
 });
 
 describe("configuredProvider", () => {
+  it.each(["clef", "clef-flash"])("does not skip setup when %s has a token but no account", (provider) => {
+    const env = { JEV_PROVIDER: provider, CLOUDFLARE_API_TOKEN: "key" };
+    expect(configuredProvider(env, providers)).toBeUndefined();
+    expect(configuredProvider({ ...env, CLOUDFLARE_ACCOUNT_ID: "account" }, providers)).toBe(provider);
+    expect(configuredProvider({ ...env, JEV_URL: "http://proxy.test/v1/systemone" }, providers)).toBe(provider);
+  });
   it("counts a provider only when its own key is there", () => {
     expect(configuredProvider({}, providers)).toBeUndefined();
     expect(configuredProvider({ AI_GATEWAY_API_KEY: "k" }, providers)).toBe("vercel");
     expect(configuredProvider({ JEV_PROVIDER: "openrouter", TYPESAFE_API_KEY: "k" }, providers)).toBeUndefined();
     expect(configuredProvider({ TYPESAFE_API_KEY: "  " }, providers)).toBeUndefined();
+    expect(configuredProvider({ JEV_PROVIDER: "local" }, providers)).toBe("local");
   });
 });
 
 describe("runSetup", () => {
   const envFile = "/nowhere/.env";
+
+  it.each(["clef", "clef-flash"])("saves the %s token and account together without printing the token", async (provider) => {
+    const user = script([provider, "cf-account", "cf-secret"]);
+    const values = await runSetup({
+      name: "jev-codex", providers, envFile, io: user.io, env: {}, save: () => {},
+      validate: async (configured: { url: string; model: string }, key: string) => {
+        expect(configured.url).toBe(`https://api.cloudflare.com/client/v4/accounts/cf-account/ai/run/@cf/cloudflare/${provider}`);
+        expect(configured.model).toBe(provider);
+        expect(key).toBe("cf-secret");
+        return { ok: true, ms: 1 };
+      },
+    });
+    expect(values).toEqual({ JEV_PROVIDER: provider, CLOUDFLARE_ACCOUNT_ID: "cf-account", CLOUDFLARE_API_TOKEN: "cf-secret" });
+    expect(user.printed.join("\n")).not.toContain("cf-secret");
+  });
+
+  it("saves the local defaults after an unavailable model check only when the user accepts", async () => {
+    const values = await runSetup({
+      name: "jev-codex", providers, envFile, io: script(["local", "", "", "y"]).io, env: {}, save: () => {},
+      validate: async () => ({ ok: false, reason: "connection refused" }),
+    });
+    expect(values).toEqual({ JEV_PROVIDER: "local", JEV_MODEL: "clef-flash", LOCAL_CLEF_URL: "http://127.0.0.1:11434/v1/systemone" });
+  });
+
+  it("validates an authenticated llama.cpp endpoint with the configured local key", async () => {
+    const user = script(["local", "clef-flash", "http://localhost:8080/v1/systemone"]);
+    const saved: unknown[] = [];
+    const values = await runSetup({
+      name: "jev-codex", providers, envFile, io: user.io, env: { LOCAL_CLEF_API_KEY: "local-secret" },
+      save: (file: string, entries: unknown) => saved.push([file, entries]),
+      validate: async (provider: { url: string }, key: string) => {
+        expect(provider.url).toBe("http://localhost:8080/v1/systemone");
+        expect(key).toBe("local-secret");
+        return { ok: true, ms: 1 };
+      },
+    });
+    expect(values).toMatchObject({ JEV_PROVIDER: "local", LOCAL_CLEF_API_KEY: "local-secret" });
+    expect(saved).toEqual([[envFile, values]]);
+    expect(user.printed.join("\n")).not.toContain("local-secret");
+  });
+
+  it("sets up a local model and endpoint without asking for a secret", async () => {
+    const user = script(["local", "clef:27b", "http://localhost:8000/v1/systemone"]);
+    user.io.askSecret = async () => expect.unreachable("local setup must not ask for an API key");
+    const values = await runSetup({
+      name: "jev-codex", providers, envFile, io: user.io, env: {}, save: () => {},
+      validate: async (provider: { url: string; model: string }, key: unknown) => {
+        expect(provider).toMatchObject({ url: "http://localhost:8000/v1/systemone", model: "clef:27b" });
+        expect(key).toBeUndefined();
+        return { ok: true, ms: 1 };
+      },
+    });
+    expect(values).toEqual({ JEV_PROVIDER: "local", JEV_MODEL: "clef:27b", LOCAL_CLEF_URL: "http://localhost:8000/v1/systemone" });
+  });
+
+  it("does not save an unavailable local model unless the user chooses to", async () => {
+    const values = await runSetup({
+      name: "jev-codex", providers, envFile, io: script(["local", "", "", "n"]).io, env: {},
+      validate: async () => ({ ok: false, reason: "connection refused" }),
+      save: () => expect.unreachable("nothing should be saved"),
+    });
+    expect(values).toBeUndefined();
+  });
 
   it("asks where and what, checks the key, and saves provider and key together", async () => {
     const user = script(["2", "  or-key  "]);
