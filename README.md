@@ -143,8 +143,8 @@ is only meaningful if you do similar work in both states.
 
 ## Where Jev runs
 
-Jev is served by TypeSafe and by three gateways that resell it. All four take the same questions
-and return the same answers, so the choice is about whose account and billing you want to use.
+Jev is served by TypeSafe and by three gateways that resell it. Clef uses the same typed question
+and answer format through Cloudflare Workers AI, with a Cloudflare account ID and API token.
 
 | Provider | Key variable | Default model | Get a key |
 | --- | --- | --- | --- |
@@ -152,6 +152,100 @@ and return the same answers, so the choice is about whose account and billing yo
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` | [Vercel dashboard](https://vercel.com/dashboard/ai-gateway/api-keys) |
 | OpenCode | `OPENCODE_API_KEY` | `jev-1.13-free` | [OpenCode Zen](https://opencode.ai/auth) |
+| Cloudflare Clef (27B) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | `clef` | [Cloudflare API tokens](https://dash.cloudflare.com/profile/api-tokens) |
+| Cloudflare Clef-flash (9B) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | `clef-flash` | [Cloudflare API tokens](https://dash.cloudflare.com/profile/api-tokens) |
+| Local Clef / Clef-flash (Ollama / llama.cpp) | None required | `clef-flash` | [Local setup](#running-clef-locally) |
+
+Choose hosted Clef with `JEV_PROVIDER=clef`, or Clef-flash with `JEV_PROVIDER=clef-flash`. The
+Cloudflare API token needs permission to use Workers AI. The setup wizard asks for both the token
+and account ID. Workers AI returns its decision payload inside a `result` envelope; the gateway
+unwraps it before applying its existing decision logic.
+Workers AI limits each request to 64 questions and restricts question IDs. The transport splits
+larger question sets into batches, maps IDs to `qN` on the wire, and restores the router's IDs in
+the returned answers. Usage totals include every batch.
+
+### Running Clef locally
+
+Use [Ollama 0.35.1 or newer](https://ollama.com/library/clef-flash), which serves Clef through
+[`POST /v1/systemone`](https://docs.ollama.com/api/systemone). Start `ollama serve` if Ollama is
+not already running, then download a model and launch your agent:
+
+```bash
+ollama pull clef-flash
+JEV_PROVIDER=local JEV_MODEL=clef-flash pnpm codex
+```
+
+For the larger model, run `ollama pull clef` and use `JEV_MODEL=clef`. Ollama tags such as
+`clef:27b` are accepted. These settings also work with the Claude, OpenCode, Gemini and other
+launchers. `jev-codex --setup` offers a local option and saves the model and endpoint to
+`~/.jev-gateway/.env`. No TypeSafe or Cloudflare credentials are needed for local decisions.
+If a gateway is already running, stop it with `pnpm codex --stop` before changing provider or model.
+
+The default endpoint is `http://127.0.0.1:11434/v1/systemone`; set `LOCAL_CLEF_URL` for another
+System One server. `JEV_URL` still overrides the endpoint for any provider. An authenticated
+local endpoint can use `LOCAL_CLEF_API_KEY`; without it, no Authorization header is sent.
+The main LLM still uses your agent's existing upstream configuration.
+
+Local calls default to a 120-second timeout (`JEV_TIMEOUT_MS`) and a 16,000-character state
+budget (`JEV_MAX_STATE_CHARS`). The gateway shortlists tools in groups of 25, leaves enum arguments
+with more than 26 values to the main LLM, and batches questions within Ollama's 64-question and
+64-KiB text request limits. If even one question plus state exceeds the byte limit, routing
+passes through to the main LLM with an error explaining which budget to reduce. Memory needs
+and latency depend on the selected model, quantization, and hardware.
+
+### Running Clef with llama.cpp / Unsloth
+
+The same local provider works with a recent `llama-server` that supports
+[`POST /v1/systemone`](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#typesafe-compatible-api-endpoints).
+This also applies to llama.cpp installed through Unsloth. Load a compatible **Clef GGUF**, with
+the decision head preserved; a regular generation model does not support this endpoint.
+Replace the model path below with your Clef-flash GGUF and adjust GPU offloading for your hardware:
+
+```bash
+llama-server \
+  --model /path/to/clef-flash.gguf \
+  --alias clef-flash \
+  --host 127.0.0.1 --port 8080 \
+  --ctx-size 8192 --batch-size 8192 --ubatch-size 8192
+```
+
+Clef evaluates the full prompt in one batch, so the prompt must fit `--ubatch-size`. Increase
+the context and batch sizes if needed, or reduce `JEV_MAX_STATE_CHARS`. Keep the server's alias
+equal to `JEV_MODEL`. For the larger model, load its GGUF and use `--alias clef` and `JEV_MODEL=clef`.
+
+Check the server directly before starting the gateway:
+
+```bash
+curl -sS --fail-with-body http://127.0.0.1:8080/v1/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"clef-flash","state":"Read README.md","questions":{"read":{"type":"noul","instructions":"Does this request ask to read a file?"}}}'
+```
+
+Then stop any existing gateway and start your client with this endpoint:
+
+```bash
+pnpm codex --stop
+JEV_PROVIDER=local JEV_MODEL=clef-flash \
+  LOCAL_CLEF_URL=http://127.0.0.1:8080/v1/systemone pnpm codex
+```
+
+The local setup wizard also accepts this endpoint. If `llama-server` uses `--api-key`, set
+`LOCAL_CLEF_API_KEY` to that key. A 404 means the endpoint or build needs checking; a 501 means
+the loaded model or capability is unsupported. Use a recent llama.cpp build and a Clef GGUF
+if the llama.cpp bundled with your Unsloth installation lacks decision support.
+When `LOCAL_CLEF_API_KEY` is already configured, the setup wizard uses it for validation and saves
+it with the local settings. It does not print the key.
+
+The provider retains the conservative batching limits used for Ollama. When llama.cpp serves
+your main LLM, run that generation model on a separate instance and port: a Clef server provides
+decisions only. Configure that upstream independently through your client's upstream setting
+or `UPSTREAM_BASE_URL` for a standalone gateway.
+
+Local decisions were checked with real Clef and Clef-flash models on Ollama 0.35.1 on 2026-10-08.
+Workers AI and llama.cpp are covered by tests with simulated HTTP responses; they have not been
+checked with a real Cloudflare account or the Unsloth llama.cpp binary. These tests cover request
+format, authentication, batching, answer decoding, and forwarding the original request when a
+decision call fails.
 
 OpenCode serves two ids at the same endpoint: `jev-1.13-free` (free,
 [for a limited time](https://opencode.ai/docs/zen/#jev)) and the paid `jev-1.13`. The gateway

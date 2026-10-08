@@ -18,7 +18,10 @@ const present = (env, name) => Boolean(env[name]?.trim());
 export function configuredProvider(env, providers) {
   const chosen = env.JEV_PROVIDER?.trim().toLowerCase();
   const id = chosen && providers[chosen] ? chosen : Object.keys(providers).find((name) => present(env, providers[name].keyEnv));
-  return id && present(env, providers[id].keyEnv) ? id : undefined;
+  if (!id) return undefined;
+  const provider = providers[id];
+  return (provider.keyOptional || present(env, provider.keyEnv))
+    && (!provider.accountEnv || present(env, provider.accountEnv) || present(env, "JEV_URL")) ? id : undefined;
 }
 
 /** Set `values` in the text of a .env file, replacing lines that exist and keeping everything else. */
@@ -46,13 +49,13 @@ export async function validateKey(provider, key, fetchImpl = fetch) {
   const ask = (model) =>
     fetchImpl(provider.url, {
       method: "POST",
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "x-title": "jev-gateway" },
+      headers: { ...(key ? { authorization: `Bearer ${key}` } : {}), "content-type": "application/json", "x-title": "jev-gateway" },
       body: JSON.stringify({
         model,
         state: "jev-gateway setup check",
         questions: { ok: { type: "noul", instructions: "Is this a setup check?" } },
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(provider.keyOptional ? 120_000 : 15_000),
     });
   try {
     const response = await ask(provider.model);
@@ -72,11 +75,11 @@ export async function validateKey(provider, key, fetchImpl = fetch) {
  * The conversation. `io` is { print, ask, askSecret }; `validate` and `save` are injected so a test
  * can play the user. Returns the environment values that were saved, or undefined if the user gave up.
  */
-export async function runSetup({ name, providers, envFile, io, validate = validateKey, save = saveEnv }) {
+export async function runSetup({ name, providers, envFile, io, env = process.env, validate = validateKey, save = saveEnv }) {
   const ids = Object.keys(providers);
-  io.print(`\n${name} needs an API key for Jev, the model that picks the tool.`);
-  io.print(`You are asked once. The key is saved to ${envFile}, readable only by you.\n`);
-  io.print("Where do you want to reach Jev?");
+  io.print(`\n${name} needs a decision model to pick the tool.`);
+  io.print(`Settings are saved to ${envFile}, readable only by you.\n`);
+  io.print("Where do you want to run the decision model?");
   ids.forEach((id, index) => io.print(`  ${index + 1}) ${providers[id].label}: ${providers[id].note}`));
 
   let id;
@@ -86,7 +89,40 @@ export async function runSetup({ name, providers, envFile, io, validate = valida
     if (!id) io.print(`Please answer with a number from 1 to ${ids.length}.`);
   }
   const provider = providers[id];
+  if (provider.keyOptional) {
+    io.print("Use Ollama 0.35.1 or later. Download a model with `ollama pull clef-flash` or `ollama pull clef`.");
+    io.print("For llama.cpp, load a Clef GGUF with --alias clef-flash (or clef) and enter its /v1/systemone endpoint.");
+    const model = (await io.ask(`Model [${provider.model}]: `)).trim() || provider.model;
+    if (!/^(clef|clef-flash)(:[^\s/]+)?$/.test(model)) {
+      io.print("Choose clef or clef-flash, optionally with an Ollama tag.");
+      return undefined;
+    }
+    const url = (await io.ask(`System One endpoint [${provider.url}]: `)).trim() || provider.url;
+    io.print("Checking the local model…");
+    const key = env[provider.keyEnv]?.trim() || undefined;
+    const result = await validate({ ...provider, url, model }, key);
+    if (!result.ok) {
+      io.print(`Could not check the model: ${result.reason}`);
+      if (!/^(y|yes)$/.test((await io.ask("Save it anyway? [y/N]: ")).trim().toLowerCase())) return undefined;
+    }
+    const values = { JEV_PROVIDER: id, JEV_MODEL: model, LOCAL_CLEF_URL: url, ...(key ? { [provider.keyEnv]: key } : {}) };
+    save(envFile, values);
+    io.print(`Saved to ${envFile}.`);
+    return values;
+  }
   io.print(`\nGet a key at ${provider.keyUrl}`);
+
+  let accountId;
+  if (provider.accountEnv) {
+    accountId = (await io.ask(`Cloudflare account ID (${provider.accountEnv}): `)).trim();
+    if (!accountId) {
+      io.print(`${provider.accountEnv} is required.`);
+      return undefined;
+    }
+  }
+  const configured = accountId
+    ? { ...provider, url: provider.url.replace("{account_id}", encodeURIComponent(accountId)) }
+    : provider;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     const key = (await io.askSecret(`Paste your ${provider.label} API key (input is hidden): `)).trim();
@@ -95,13 +131,13 @@ export async function runSetup({ name, providers, envFile, io, validate = valida
       return undefined;
     }
     io.print("Checking the key with Jev…");
-    let result = await validate(provider, key);
+    let result = await validate(configured, key);
     let model = provider.model;
     if (result.freeUnavailable && provider.paidModel) {
       const paid = (await io.ask(`Use paid ${provider.paidModel} for Jev? Its key check may be billed. [y/N]: `)).trim().toLowerCase();
       if (paid === "y" || paid === "yes") {
         model = provider.paidModel;
-        result = await validate({ ...provider, model, paidModel: undefined }, key);
+        result = await validate({ ...configured, model, paidModel: undefined }, key);
         if (result.ok) result = { ...result, paidModel: model };
       } else {
         io.print("The gateway will pass requests to the LLM while the free Jev model is unavailable.");
@@ -120,7 +156,7 @@ export async function runSetup({ name, providers, envFile, io, validate = valida
     } else {
       io.print(`The key works (Jev answered in ${result.ms} ms).`);
     }
-    const values = { JEV_PROVIDER: id, [provider.keyEnv]: key };
+    const values = { JEV_PROVIDER: id, [provider.keyEnv]: key, ...(accountId ? { [provider.accountEnv]: accountId } : {}) };
     if (provider.paidModel) values.JEV_MODEL = model;
     save(envFile, values);
     io.print(`Saved to ${envFile}. Change it any time with \`${name} --setup\`.\n`);

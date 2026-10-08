@@ -88,8 +88,8 @@ export const shardKey = (index: number) => `shard:${index}`;
  * First pass over a roster too big for one question: every shard is ranked in the same Jev call,
  * and the best few of each go on to the real decision — ranking wide, then judging a shortlist.
  */
-export function buildShortlistQuestions(tools: RouterTool[]): { questions: Questions; shards: RouterTool[][] } {
-  const shardCount = Math.ceil(tools.length / MAX_TOOLS);
+export function buildShortlistQuestions(tools: RouterTool[], maxTools = MAX_TOOLS): { questions: Questions; shards: RouterTool[][] } {
+  const shardCount = Math.ceil(tools.length / maxTools);
   const size = Math.ceil(tools.length / shardCount);
   const shards = Array.from({ length: shardCount }, (_, index) => tools.slice(index * size, (index + 1) * size));
   const questions: Questions = {};
@@ -112,7 +112,7 @@ export function buildShortlistQuestions(tools: RouterTool[]): { questions: Quest
  */
 export function buildQuestions(
   tools: RouterTool[],
-  options: { allowNone: boolean; withArgs: boolean },
+  options: { allowNone: boolean; withArgs: boolean; maxOptions?: number },
 ): { questions: Questions; plans: ToolPlan[] } {
   const plans = tools.map(planTool);
   const criteria = toolCriteria(tools);
@@ -121,6 +121,8 @@ export function buildQuestions(
       "No tool call is needed right now: the assistant should reply to the user in plain text " +
       "(answer directly, ask a clarifying question, or report results that tools already returned).";
   }
+  // Ollama requires at least two choices, even for a sole tool with tool_choice=required.
+  if (options.maxOptions && Object.keys(criteria).length === 1) criteria[NONE_OF_THESE] = "The listed tool does not fit the next step.";
 
   const questions: Questions = {
     [TOOL_KEY]: {
@@ -142,7 +144,8 @@ export function buildQuestions(
   plans.forEach((plan, toolIndex) => {
     const asked = plan.closedParams?.filter((param) => param.kind !== "const") ?? [];
     const cost = asked.reduce((sum, param) => sum + (param.required ? 1 : 2), 0);
-    if (!plan.closedParams || argQuestions + cost > MAX_ARG_QUESTIONS) {
+    if (!plan.closedParams || argQuestions + cost > MAX_ARG_QUESTIONS
+      || asked.some((param) => param.kind === "enum" && param.values.size > (options.maxOptions ?? 255))) {
       delete plan.closedParams;
       return;
     }

@@ -48,7 +48,7 @@ export async function runLauncher(spec) {
 
   const providers = loadProviders(ROOT);
   const providerLabels = Object.values(providers).map((p) => p.label).join(", ");
-  const providerKeys = Object.values(providers).map((p) => p.keyEnv);
+  const providerKeys = [...new Set(Object.values(providers).filter((p) => !p.keyOptional).map((p) => p.keyEnv))];
   const keysList = `${providerKeys.slice(0, -1).join(", ")} or ${providerKeys.at(-1)}`;
 
   const help = `${spec.name}: ${spec.client} with tool selection routed through Jev
@@ -60,13 +60,15 @@ export async function runLauncher(spec) {
   ${spec.name} --logs             follow routing decisions live (use a second terminal)
   ${spec.name} --start            start the gateway without opening ${spec.client}
   ${spec.name} --stop             stop the background gateway
-  ${spec.name} --setup            choose where to reach Jev (${providerLabels}) and set the key
+  ${spec.name} --setup            configure the decision provider (${providerLabels})
   ${spec.name} --print-config     how to point plain \`${spec.client}\` at the gateway permanently
   ${spec.name} --gateway-help     this text (\`--help\` shows ${spec.client}'s own help)
 
 Environment (or ${ENV_FILES.at(-1)}):
-  A key for Jev is required. ${spec.name} asks for it the first time and saves it; it can be
+  Hosted providers require a key. ${spec.name} asks for it the first time and saves it; it can be
   ${keysList} (JEV_PROVIDER picks when several are set)
+  JEV_PROVIDER=local  use Clef in Ollama or llama.cpp (JEV_MODEL=clef or clef-flash)
+  LOCAL_CLEF_URL      System One endpoint (default http://127.0.0.1:11434/v1/systemone)
   ${spec.portEnv}   router port for ${spec.client} (default ${spec.defaultPort})
   ${spec.upstreamHelp}
   BROWSER            command --dashboard opens the page with; "none" only prints the URL
@@ -113,8 +115,8 @@ Environment (or ${ENV_FILES.at(-1)}):
   const ensureKey = async () => {
     if (configuredProvider(process.env, providers)) return;
     if (process.stdin.isTTY && process.stdout.isTTY) return setup();
-    const names = Object.values(providers).map((provider) => provider.keyEnv).join(", ");
-    console.error(`${spec.name}: no API key for Jev. Run \`${spec.name} --setup\` in a terminal, or set one of ${names} (environment or ${envFile}).`);
+    const names = providerKeys.join(", ");
+    console.error(`${spec.name}: no API key for Jev. Run \`${spec.name} --setup\` in a terminal, or set one of ${names} (environment or ${envFile}), or JEV_PROVIDER=local for Ollama.`);
     process.exit(1);
   };
 
@@ -238,7 +240,7 @@ Environment (or ${ENV_FILES.at(-1)}):
     const via = running?.jev ? `, Jev via ${providers[running.jev]?.label ?? running.jev}` : "";
     console.log(running ? `${spec.name}: router up on ${origin} → ${running.upstream}${via}` : `${spec.name}: router is not running`);
     const configured = configuredProvider(process.env, providers);
-    console.log(configured ? `key: ${providers[configured].label} (${providers[configured].keyEnv})` : `key: none yet, run \`${spec.name} --setup\``);
+    console.log(configured ? `provider: ${providers[configured].label}${providers[configured].keyOptional ? " (no API key required)" : ` (${providers[configured].keyEnv})`}` : `key: none yet, run \`${spec.name} --setup\``);
     console.log(`logs: ${logFile}`);
     for (const line of await notices(process.argv.slice(3))) console.log(line);
     return;
