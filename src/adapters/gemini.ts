@@ -1,6 +1,7 @@
 import { truncate } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
+import { hasGeminiMultimodal, MULTIMODAL_SKIP } from "../multimodal.js";
 
 export interface GeminiPart {
   text?: string;
@@ -57,6 +58,8 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
   const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
   const rawDecls = (req.tools ?? []).flatMap((t) => t.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
   if (rawDecls.length === 0) return { skip: "no_tools" };
+  if (config?.mode === "NONE") return { skip: "tool_choice_already_decided" };
+  if (hasGeminiMultimodal(req.contents)) return { skip: MULTIMODAL_SKIP };
   // Tools Google runs itself (googleSearch, codeExecution, urlContext) are entries without
   // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
   const hosted = (req.tools ?? []).flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));

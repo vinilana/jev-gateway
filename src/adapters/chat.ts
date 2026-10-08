@@ -3,6 +3,7 @@ import type { Decision } from "../decide.js";
 import { textOf, truncate } from "../state.js";
 import type { ChatRequest, DirectCall, RouterInput, RouterTool, ToolDef, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
+import { hasChatMultimodal, MULTIMODAL_SKIP } from "../multimodal.js";
 
 /** OpenAI Chat Completions (`POST /v1/chat/completions`). */
 
@@ -37,6 +38,10 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
   if (rawTools.some((tool) => tool.type === "function" ? !tool.function?.name : typeof tool.type !== "string")) {
     return { skip: "malformed_tools" };
   }
+  if (!rawTools.length) return { skip: "no_tools" };
+  const choice = req.tool_choice ?? "auto";
+  if (choice !== "auto" && choice !== "required") return { skip: "tool_choice_already_decided" };
+  if (hasChatMultimodal(req.messages)) return { skip: MULTIMODAL_SKIP };
 
   const toolNameByCallId = new Map<string, string>();
   for (const message of req.messages) {
@@ -69,7 +74,6 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
     }
   }
 
-  const choice = req.tool_choice ?? "auto";
   return {
     system: system.join("\n\n"),
     turns,

@@ -41,6 +41,7 @@ describe("chatAdapter.toInput + buildState", () => {
     const input = chatAdapter.toInput(
       {
         model: "m",
+        tools: [{ type: "function", function: { name: "get_weather", parameters: { type: "object", properties: {} } } }],
         messages: [
           { role: "system", content: "Be brief." },
           { role: "user", content: "x".repeat(500) },
