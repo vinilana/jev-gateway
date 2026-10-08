@@ -1,14 +1,15 @@
-import { truncate } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
 
 export interface GeminiPart {
   text?: string;
   functionCall?: {
+    id?: string;
     name: string;
     args?: Record<string, unknown>;
   };
   functionResponse?: {
+    id?: string;
     name: string;
     response?: Record<string, unknown>;
   };
@@ -64,13 +65,18 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
   const systemParts = (req.systemInstruction?.parts ?? [])
     .map((p) => p.text)
     .filter((t): t is string => typeof t === "string" && t.length > 0);
-  const system = truncate(systemParts.join("\n\n"), maxMessageChars);
+  const system = systemParts.join("\n\n");
 
   const turns: RouterInput["turns"] = [];
   for (const content of req.contents) {
     const role = content.role === "model" ? "assistant" : "user";
     const textParts: string[] = [];
-    const toolCalls: Array<{ tool: string; arguments: string }> = [];
+    const toolCalls: Array<{ tool: string; arguments: string; call_id?: string }> = [];
+    const flush = () => {
+      if (textParts.length || toolCalls.length) turns.push({ role,
+        ...(textParts.length ? { text: textParts.splice(0).join("\n") } : {}),
+        ...(toolCalls.length ? { tool_calls: toolCalls.splice(0) as unknown as Json[] } : {}) });
+    };
 
     for (const part of content.parts ?? []) {
       if (part.text) {
@@ -78,24 +84,21 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
       } else if (part.functionCall) {
         toolCalls.push({
           tool: part.functionCall.name,
-          arguments: truncate(JSON.stringify(part.functionCall.args ?? {}), maxMessageChars),
+          ...(typeof part.functionCall.id === "string" ? { call_id: part.functionCall.id } : {}),
+          arguments: JSON.stringify(part.functionCall.args ?? {}),
         });
       } else if (part.functionResponse) {
+        flush();
         turns.push({
           role: "tool_result",
           tool: part.functionResponse.name,
-          content: truncate(JSON.stringify(part.functionResponse.response ?? {}), maxMessageChars),
+          ...(typeof part.functionResponse.id === "string" ? { call_id: part.functionResponse.id } : {}),
+          content: JSON.stringify(part.functionResponse.response ?? {}),
         });
       }
     }
 
-    if (textParts.length || toolCalls.length) {
-      turns.push({
-        role,
-        ...(textParts.length ? { text: truncate(textParts.join("\n"), maxMessageChars) } : {}),
-        ...(toolCalls.length ? { tool_calls: toolCalls as unknown as Json[] } : {}),
-      });
-    }
+    flush();
   }
 
   const mode = config?.mode ?? "AUTO";

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { exaAdapter } from "../src/adapters/exa.js";
 import { frame, peel } from "../src/proto/connect.js";
 import { concat, field, readFields, text, utf8 } from "../src/proto/wire.js";
+import { buildState } from "../src/state.js";
 
 const userMsg = (body: string) => field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 1n), utf8(3, body)));
 const toolDef = (name: string, schema = "{}") => field(10, 2, concat(utf8(1, name), utf8(2, `does ${name}`), utf8(3, schema)));
@@ -54,18 +55,67 @@ describe("exaAdapter.toInput", () => {
     expect(input.turns[1]).toEqual({
       role: "assistant",
       text: "thinking about it",
-      tool_calls: [{ tool: "exec", arguments: '{"command":"ls"}' }],
+      tool_calls: [{ tool: "exec", call_id: "call_abc#def", arguments: '{"command":"ls"}' }],
     });
-    expect(input.turns[2]).toEqual({ role: "tool_result", tool: "exec", content: "file1 file2" });
+    expect(input.turns[2]).toEqual({ role: "tool_result", tool: "exec", call_id: "call_abc#def", content: "file1 file2" });
   });
 
-  it("truncates thinking the same way it truncates message text", () => {
+  it("retains Devin dependency spans after a duplicate result without changing the wire request", () => {
+    const call = (id: string) => field(3, 2, concat(
+      field(2, 0, 2n), field(6, 2, concat(utf8(1, id), utf8(2, "exec"), utf8(3, "{}"))),
+    ));
+    const result = (id: string, content: string) => field(3, 2, concat(field(2, 0, 4n), utf8(3, content), utf8(7, id)));
+    const bytes = request(call("a"), result("a", "A"), call("b"), result("a", "duplicate ".repeat(100)), result("b", "B"), toolDef("exec"));
+    const req = parse(bytes);
+    const input = exaAdapter.toInput(req, 4000);
+    if ("skip" in input) throw new Error(input.skip);
+    const smallest = { earlier_turns_omitted: 2, clipped: true, conversation: [
+      { role: "assistant", tool_calls: [{ tool: "exec", call_id: "b", arguments: "" }] },
+      { role: "tool_result", tool: "exec", call_id: "a", content: "" },
+      { role: "tool_result", tool: "exec", call_id: "b", content: "" },
+    ] };
+    const budget = JSON.stringify(smallest).length + 30;
+    const state = buildState(input, { maxMessageChars: 4000, maxStateChars: budget });
+    expect(state.unrepresentable).toBeUndefined();
+    expect(state.earlier_turns_omitted).toBe(2);
+    expect(state.conversation).toEqual([
+      { role: "assistant", tool_calls: [{ tool: "exec", call_id: "b", arguments: "{}" }] },
+      expect.objectContaining({ role: "tool_result", call_id: "a" }),
+      { role: "tool_result", tool: "exec", call_id: "b", content: "B" },
+    ]);
+    expect(JSON.stringify(state).length).toBeLessThanOrEqual(budget);
+    expect(exaAdapter.encode!(req)).toEqual(bytes);
+  });
+
+  it("leaves thinking intact until state construction records clipping", () => {
     const assistant = field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 2n), utf8(11, "t".repeat(100))));
     const input = exaAdapter.toInput(parse(request(assistant, toolDef("exec"))), 30);
     if ("skip" in input) throw new Error(input.skip);
     expect(input.turns[0]!.role).toBe("assistant");
-    expect((input.turns[0] as { text?: string }).text).toContain("[truncated]");
-    expect((input.turns[0] as { text?: string }).text!.length).toBeLessThan(40);
+    expect(input.turns[0]!.text).toBe("t".repeat(100));
+    const state = buildState(input, { maxMessageChars: 30, maxStateChars: 2000 });
+    expect(state.clipped).toBe(true);
+    expect(JSON.stringify(state.conversation)).toContain("[truncated]");
+  });
+
+  it("records clipping of Exa text, arguments and results without changing the wire request", () => {
+    const long = "x".repeat(100);
+    const assistant = field(3, 2, concat(
+      field(2, 0, 2n),
+      field(6, 2, concat(utf8(1, "call-long"), utf8(2, "exec"), utf8(3, long))),
+    ));
+    const result = field(3, 2, concat(field(2, 0, 4n), utf8(3, long), utf8(7, "call-long")));
+    const bytes = request(userMsg(long), assistant, result, toolDef("exec"));
+    const req = parse(bytes);
+    const input = exaAdapter.toInput(req, 30);
+    if ("skip" in input) throw new Error(input.skip);
+    expect(input.turns[0]!.text).toBe(long);
+    expect(input.turns[1]!.tool_calls).toEqual([{ tool: "exec", call_id: "call-long", arguments: long }]);
+    expect(input.turns[2]!.content).toBe(long);
+    const state = buildState(input, { maxMessageChars: 30, maxStateChars: 2000 });
+    expect(state.clipped).toBe(true);
+    expect(JSON.stringify(state.conversation).match(/\[truncated\]/g)).toHaveLength(3);
+    expect(exaAdapter.encode!(req)).toEqual(bytes);
   });
 
   it("skips messages with roles it does not know", () => {

@@ -53,12 +53,13 @@ describe("chatAdapter.toInput + buildState", () => {
       },
       100,
     ) as RouterInput;
-    const state = buildState(input, { maxStateChars: 200, maxMessageChars: 100 });
+    const state = buildState(input, { maxStateChars: 300, maxMessageChars: 100 });
+    expect(JSON.stringify(state).length).toBeLessThanOrEqual(300);
     expect(state.assistant_instructions).toBe("Be brief.");
     expect(state.earlier_turns_omitted).toBe(1);
     expect(state.conversation).toEqual([
-      { role: "assistant", tool_calls: [{ tool: "get_weather", arguments: "{}" }] },
-      { role: "tool_result", tool: "get_weather", content: "sunny" },
+      { role: "assistant", tool_calls: [{ tool: "get_weather", call_id: "c1", arguments: "{}" }] },
+      { role: "tool_result", tool: "get_weather", call_id: "c1", content: "sunny" },
     ]);
   });
 });

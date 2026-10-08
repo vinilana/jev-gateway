@@ -1,6 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Decision } from "../decide.js";
-import { truncate } from "../state.js";
 import type { DirectCall, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { frame, peel, type Frame } from "../proto/connect.js";
 import { concat, encodeVarint, field, readFields, text, utf8, type WireField } from "../proto/wire.js";
@@ -70,7 +69,7 @@ function toTools(tools: WireField[]): RouterTool[] {
   return out;
 }
 
-function toInput(req: ExaRequest, maxMessageChars: number): RouterInput | { skip: string } {
+function toInput(req: ExaRequest): RouterInput | { skip: string } {
   const rawTools = byField(req.message, 10);
   const tools = toTools(rawTools);
   if (tools.length === 0 && rawTools.length > 0) return { skip: "malformed_tools" };
@@ -80,7 +79,7 @@ function toInput(req: ExaRequest, maxMessageChars: number): RouterInput | { skip
   for (const entry of byField(req.message, 3)) {
     const f = fieldsOf(entry.bytes);
     const role = varint(first(f, 2));
-    const body = truncate(text(first(f, 3)), maxMessageChars);
+    const body = text(first(f, 3));
     if (role === 1) {
       turns.push({ role: "user", text: body });
     } else if (role === 2) {
@@ -89,18 +88,20 @@ function toInput(req: ExaRequest, maxMessageChars: number): RouterInput | { skip
         const id = text(first(cf, 1));
         const name = text(first(cf, 2));
         if (id && name) toolNameByCallId.set(id, name);
-        return { tool: name || "unknown", arguments: truncate(text(first(cf, 3)), maxMessageChars) };
+        return { tool: name || "unknown", ...(id ? { call_id: id } : {}), arguments: text(first(cf, 3)) };
       });
-      const thinking = truncate(text(first(f, 11)), maxMessageChars);
+      const thinking = text(first(f, 11));
       turns.push({
         role: "assistant",
         ...(body || thinking ? { text: [thinking, body].filter(Boolean).join("\n") } : {}),
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       });
     } else if (role === 4) {
+      const id = text(first(f, 7));
       turns.push({
         role: "tool_result",
-        tool: toolNameByCallId.get(text(first(f, 7))) ?? "unknown",
+        tool: toolNameByCallId.get(id) ?? "unknown",
+        ...(id ? { call_id: id } : {}),
         content: body,
       });
     }

@@ -168,6 +168,7 @@ const CATEGORIES = [
 // [who made the call, what it means]
 const REASONS = {
   no_tools: ["Jev not asked", "The request carried no tools, so there was nothing to select."],
+  incomplete_routing_context: ["Jev not asked", "The newest interaction structure cannot fit the serialized routing-state budget."],
   no_messages: ["Jev not asked", "The request had no conversation to decide on."],
   previous_response_id: ["Jev not asked", "The conversation lives upstream (previous_response_id); the router can't see it."],
   agent_message: ["Jev not asked", "The conversation holds a message between Codex agents (agent_message), which the router cannot read."],
