@@ -1,9 +1,11 @@
+import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createDump } from "./debug.js";
 import { createAskJev } from "./jev.js";
 import { createEventLog } from "./events.js";
+import { setupMitm } from "./mitm.js";
 
 const config = loadConfig();
 
@@ -15,7 +17,9 @@ const app = createApp({
   log: (entry) => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry })),
 });
 
-serve({ fetch: app.fetch, hostname: config.host, port: config.port }, ({ port }) => {
+const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, ({ port }) => {
   console.log(`jev-gateway listening on http://localhost:${port} → ${config.upstreamBaseUrl} (jev: ${config.jevModel} via ${config.jevProvider})`);
   console.log(`dashboard: http://localhost:${port}/dashboard`);
 });
+
+setupMitm(server as unknown as Server, app.fetch);
