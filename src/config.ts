@@ -1,4 +1,5 @@
 import { PROVIDERS, resolveModel, resolveProvider, resolveUrl, type ProviderId } from "./jev.js";
+import { readFileSync } from "node:fs";
 export interface Config {
   /** Interface to listen on. Loopback by default: the gateway forwards credentials and must not be reachable from the LAN. */
   host: string;
@@ -58,6 +59,24 @@ const bool = (env: Env, key: string, fallback: boolean): boolean => {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 };
 
+function credential(env: Env, key: string): string | undefined {
+  const value = str(env, key);
+  const fileKey = `${key}_FILE`;
+  if (env[fileKey] === undefined) return value;
+  if (value) throw new Error(`Set only one of ${key} and ${fileKey}`);
+  const path = str(env, fileKey);
+  if (!path) throw new Error(`${fileKey} must name a credential file`);
+  let contents: string;
+  try {
+    contents = readFileSync(path, "utf8").trim();
+  } catch {
+    // Do not include the filesystem exception: it contains the private path.
+    throw new Error(`${fileKey} could not be read`);
+  }
+  if (!contents) throw new Error(`${fileKey} must contain a non-empty credential`);
+  return contents;
+}
+
 export function loadConfig(env: Env = process.env): Config {
   const jevProvider = resolveProvider(env);
   const jevModel = resolveModel(jevProvider, str(env, "JEV_MODEL"));
@@ -73,7 +92,7 @@ export function loadConfig(env: Env = process.env): Config {
     routerApiKey: str(env, "ROUTER_API_KEY"),
     argsModel: str(env, "ARGS_MODEL"),
     jevProvider,
-    jevApiKey: str(env, PROVIDERS[jevProvider].keyEnv),
+    jevApiKey: credential(env, PROVIDERS[jevProvider].keyEnv),
     jevUrl: resolveUrl(jevProvider, env),
     jevModel,
     jevTimeoutMs: num(env, "JEV_TIMEOUT_MS", 4000),

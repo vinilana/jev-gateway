@@ -34,10 +34,15 @@ const present = (env: Env, name: string) => Boolean(env[name]?.trim());
 export function resolveProvider(env: Env): ProviderId {
   const chosen = env.JEV_PROVIDER?.trim().toLowerCase();
   if (chosen) {
-    if (!isProvider(chosen)) throw new Error(`JEV_PROVIDER must be one of ${Object.keys(providers).join(", ")}, got "${chosen}"`);
+    if (!isProvider(chosen))
+      throw new Error(`JEV_PROVIDER must be one of ${Object.keys(providers).join(", ")}, got "${chosen}"`);
     return chosen;
   }
-  return (Object.keys(providers) as ProviderId[]).find((id) => present(env, providers[id].keyEnv)) ?? "typesafe";
+  return (
+    (Object.keys(providers) as ProviderId[]).find(
+      (id) => present(env, providers[id].keyEnv) || env[`${providers[id].keyEnv}_FILE`] !== undefined,
+    ) ?? "typesafe"
+  );
 }
 
 /**
@@ -73,13 +78,18 @@ const MODEL_GONE = new Set([404, 410]);
 function normalize(result: SystemOneResult<Questions>): SystemOneResult<Questions> {
   const answers: Record<string, unknown> = {};
   for (const [name, answer] of Object.entries(result.answers ?? {})) {
-    const probabilities = "probabilities" in answer ? Object.values(answer.probabilities as Record<string, number>) : [];
+    const probabilities =
+      "probabilities" in answer ? Object.values(answer.probabilities as Record<string, number>) : [];
     answers[name] =
       answer.type !== "noul" && typeof answer.confidence !== "number" && probabilities.length
         ? { ...answer, confidence: Math.max(...probabilities) }
         : answer;
   }
-  return { model: result.model, answers, usage: { input_tokens: result.usage?.input_tokens ?? 0, output_tokens: result.usage?.output_tokens ?? 0 } } as SystemOneResult<Questions>;
+  return {
+    model: result.model,
+    answers,
+    usage: { input_tokens: result.usage?.input_tokens ?? 0, output_tokens: result.usage?.output_tokens ?? 0 },
+  } as SystemOneResult<Questions>;
 }
 
 /** The one call the gateway makes to Jev, for whichever provider is configured. */
@@ -106,10 +116,13 @@ export function createAskJev(
     });
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 200);
-      const paidHint = config.jevProvider === "opencode" && request.model === provider.model && MODEL_GONE.has(response.status)
-        ? `free model unavailable; set JEV_MODEL=${provider.paidModel} for paid Jev. `
-        : "";
-      throw Object.assign(new Error(`${response.status} from ${provider.label}: ${paidHint}${detail}`), { status: response.status });
+      const paidHint =
+        config.jevProvider === "opencode" && request.model === provider.model && MODEL_GONE.has(response.status)
+          ? `free model unavailable; set JEV_MODEL=${provider.paidModel} for paid Jev. `
+          : "";
+      throw Object.assign(new Error(`${response.status} from ${provider.label}: ${paidHint}${detail}`), {
+        status: response.status,
+      });
     }
     return normalize((await response.json()) as SystemOneResult<Questions>);
   };
