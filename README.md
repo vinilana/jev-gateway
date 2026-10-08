@@ -123,7 +123,9 @@ You will see:
 - **LLM tokens:** input (and how much came from the prompt cache), output (and how much was hidden
   reasoning), and seconds per request.
 - **A live table** of recent requests. A request appears when its reply finishes, because that is
-  when the provider reports its tokens.
+  when the provider reports its tokens. Model shows what the reply says actually served it — the
+  model you asked for, in parentheses, when an upstream that is itself a router (OpenRouter, a
+  local proxy such as Jevonian, LiteLLM) served a different one.
 
 The dashboard only shows request metadata. Prompts, tool arguments, and credentials never reach it.
 

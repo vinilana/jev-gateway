@@ -13,7 +13,7 @@ import { redactHeaders, summarizeResponse, type Dump } from "./debug.js";
 import { decide, type AskJev, type Decision } from "./decide.js";
 import { createEventLog, type EventLog } from "./events.js";
 import { forward } from "./upstream.js";
-import { readUsage } from "./usage.js";
+import { readServedModel, readUsage } from "./usage.js";
 
 export interface Deps {
   config: Config;
@@ -83,12 +83,20 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
   /**
    * Log a forwarded request once its reply has ended, because that is when the provider says what
-   * it cost. The reply is read from a clone in the background, so the client is never delayed.
+   * it cost — and, when the upstream is itself a router, which model actually served it. Read from
+   * two clones in the background, so the client is never delayed.
    */
   const logWhenDone = (entry: Record<string, unknown>, response: Response, startedAt: number) => {
-    const copy = response.clone();
-    void readUsage(copy).then((usage) =>
-      log({ ...entry, status: response.status, durationMs: Math.round(performance.now() - startedAt), ...(usage ? { usage } : {}) }),
+    const usageCopy = response.clone();
+    const modelCopy = response.clone();
+    void Promise.all([readUsage(usageCopy), readServedModel(modelCopy)]).then(([usage, servedModel]) =>
+      log({
+        ...entry,
+        status: response.status,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...(usage ? { usage } : {}),
+        ...(servedModel && servedModel !== entry.model ? { servedModel } : {}),
+      }),
     );
   };
 

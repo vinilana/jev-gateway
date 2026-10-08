@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { frame } from "../src/proto/connect.js";
 import { concat, encodeVarint, field, utf8 } from "../src/proto/wire.js";
-import { readUsage } from "../src/usage.js";
+import { readServedModel, readUsage } from "../src/usage.js";
 import { chat, fakeJev, settled, testConfig } from "./helpers.js";
 
 const sse = (events: object[]) =>
@@ -95,6 +95,49 @@ describe("readUsage", () => {
     const stats = field(28, 2, concat(utf8(1, "Other"), entry("something_else", 3)));
     expect(await readUsage(connect(frame(stats)))).toBeUndefined();
     expect(await readUsage(connect(Uint8Array.of(1, 2, 3)))).toBeUndefined();
+  });
+});
+
+describe("readServedModel", () => {
+  it("reads the model back from a plain JSON reply, Chat Completions and Responses alike", async () => {
+    expect(await readServedModel(Response.json({ id: "chatcmpl-1", model: "gpt-4o-2024-08-06", choices: [] }))).toBe("gpt-4o-2024-08-06");
+    expect(await readServedModel(Response.json({ id: "resp_1", object: "response", model: "gpt-5-2025-08-07" }))).toBe("gpt-5-2025-08-07");
+  });
+
+  it("reads it from the first Chat Completions stream chunk, every chunk carries it", async () => {
+    const model = await readServedModel(
+      sse([
+        { id: "chatcmpl-1", model: "gpt-4o-2024-08-06", choices: [{ delta: { role: "assistant" } }] },
+        { id: "chatcmpl-1", model: "gpt-4o-2024-08-06", choices: [{ delta: { content: "hi" } }] },
+      ]),
+    );
+    expect(model).toBe("gpt-4o-2024-08-06");
+  });
+
+  it("reads Anthropic's model from message_start, plain and streamed", async () => {
+    expect(await readServedModel(Response.json({ type: "message", model: "claude-haiku-4-5-20251001" }))).toBe("claude-haiku-4-5-20251001");
+    const streamed = await readServedModel(
+      sse([
+        { type: "message_start", message: { model: "claude-haiku-4-5-20251001", usage: { input_tokens: 12 } } },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+      ]),
+    );
+    expect(streamed).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("reads a Responses stream's model from inside `response`", async () => {
+    const model = await readServedModel(
+      sse([
+        { type: "response.created", response: { model: "gpt-5-2025-08-07" } },
+        { type: "response.completed", response: { model: "gpt-5-2025-08-07", usage: { input_tokens: 1, output_tokens: 1 } } },
+      ]),
+    );
+    expect(model).toBe("gpt-5-2025-08-07");
+  });
+
+  it("reports nothing rather than guess when no reply says", async () => {
+    expect(await readServedModel(Response.json({ choices: [] }))).toBeUndefined();
+    expect(await readServedModel(new Response("<html>bad gateway</html>", { status: 502 }))).toBeUndefined();
   });
 });
 
