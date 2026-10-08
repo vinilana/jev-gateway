@@ -3,6 +3,7 @@ import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } fro
 import { Hono, type Context } from "hono";
 import type { Adapter } from "./adapters/adapter.js";
 import { chatAdapter } from "./adapters/chat.js";
+import { cloudcodeAdapter } from "./adapters/cloudcode.js";
 import { geminiAdapter } from "./adapters/gemini.js";
 import { exaAdapter } from "./adapters/exa.js";
 import { messagesAdapter } from "./adapters/messages.js";
@@ -261,7 +262,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/router/decide", async (c) => {
     const req = parseBody<Record<string, unknown>>(new Uint8Array(await c.req.arrayBuffer()), undefined);
     if (!req) return c.json({ error: { message: "Body must be a JSON object", type: "invalid_request_error" } }, 400);
-    const adapters = { chat: chatAdapter, responses: responsesAdapter, messages: messagesAdapter, gemini: geminiAdapter };
+    const adapters = { chat: chatAdapter, responses: responsesAdapter, messages: messagesAdapter, gemini: geminiAdapter, cloudcode: cloudcodeAdapter };
     // Chat Completions and Anthropic Messages both use `messages`; only Anthropic has a top-level
     // `system` or tools described by `input_schema`. Gemini uses `contents`.
     const tools = Array.isArray(req.tools) ? (req.tools as Record<string, unknown>[]) : [];
@@ -286,6 +287,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/v1/responses", route(responsesAdapter));
   app.post("/v1/messages", route(messagesAdapter));
   app.post("/v1beta/models/*", route(geminiAdapter));
+  app.post("/v1internal:streamGenerateContent", route(cloudcodeAdapter));
+  app.post("/v1internal:generateContent", route(cloudcodeAdapter));
   app.post("/exa.api_server_pb.ApiServerService/GetChatMessage", route(exaAdapter));
 
   // Everything else (models, embeddings, …) is proxied untouched.
@@ -295,6 +298,16 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     return response;
   });
   app.all("/v1beta/*", async (c) => {
+    const response = await forward(c.req.raw, config, fetchImpl);
+    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+    return response;
+  });
+  app.all("/v1internal:*", async (c) => {
+    const response = await forward(c.req.raw, config, fetchImpl);
+    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+    return response;
+  });
+  app.all("/v1internal/*", async (c) => {
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;

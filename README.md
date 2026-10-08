@@ -33,6 +33,7 @@ jev-opencode   # use it exactly like `opencode` (stable v1)
 jev-kilo       # Kilo CLI, on free models unless KILO_API_KEY is set
 jev-gemini     # Gemini CLI, with a Gemini API key
 jev-devin      # use it exactly like `devin`
+jev-antigravity # Antigravity CLI (`agy`), with Google login via HTTPS proxy
 ```
 
 **3. Answer two questions, once**
@@ -78,8 +79,8 @@ gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `jev-gemini` and
-`jev-devin`.
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `jev-gemini`,
+`jev-devin` and `jev-antigravity`.
 
 | Command | What it does |
 | --- | --- |
@@ -95,9 +96,9 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `j
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792 and Kilo
-8793. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
-`JEV_GEMINI_PORT`, `JEV_DEVIN_PORT` and `JEV_KILO_PORT`.
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792, Kilo
+8793 and Antigravity 8794. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
+`JEV_GEMINI_PORT`, `JEV_DEVIN_PORT`, `JEV_KILO_PORT` and `JEV_ANTIGRAVITY_PORT`.
 
 ## Dashboard
 
@@ -106,8 +107,8 @@ jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard
 ```
 
 This opens `http://localhost:8790/dashboard`. If no browser window appears, paste that address into
-your browser. One page shows each gateway (Codex, Claude, OpenCode, Kilo, Gemini and
-Devin) and refreshes every 2 seconds.
+your browser. One page shows each gateway (Codex, Claude, OpenCode, Kilo, Gemini, Devin and
+Antigravity) and refreshes every 2 seconds.
 
 To find the other gateways, the page tries their default ports. A port that never answered is
 tried again after 10 seconds, then less often, down to once a minute; each try that finds nothing
@@ -452,6 +453,20 @@ One safety net does not reach Devin. Elsewhere, when the upstream refuses a rewr
 400 or 422, the gateway sends the original instead. Connect streams report errors inside the
 stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. Set
 `JEV_ROUTING=off` or run `devin` directly if that happens.
+
+## Using it with Antigravity (agy)
+
+`jev-antigravity` runs the Antigravity CLI (`agy`) with `HTTPS_PROXY` and `HTTP_PROXY` pointed at a
+gateway on port 8794, and `SSL_CERT_FILE` pointed at a generated certificate bundle
+(`~/.jev-gateway/certs/bundle.pem`). The gateway intercepts HTTPS CONNECT requests to
+`daily-cloudcode-pa.googleapis.com` using a local CA, routes `POST /v1internal:streamGenerateContent`
+and `:generateContent` through Jev, and proxies every other `/v1internal/*` endpoint
+(`loadCodeAssist`, `fetchAvailableModels`, ...) untouched. Other domains requested via CONNECT
+are tunneled through plain TCP.
+
+Your Google account OAuth credentials travel untouched in the `Authorization` header. Override the
+upstream URL with `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL` (default `https://daily-cloudcode-pa.googleapis.com`).
+Unit-tested, not yet run against the real Cloud Code API in a live session.
 
 ## Running it as a server for your own app
 

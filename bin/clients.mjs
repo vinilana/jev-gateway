@@ -341,3 +341,42 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
+export const agy = {
+  name: "jev-agy",
+  client: "agy",
+  portEnv: "JEV_ANTIGRAVITY_PORT",
+  defaultPort: 8794,
+  upstream: () => process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL ?? "https://daily-cloudcode-pa.googleapis.com",
+  upstreamHelp: "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL   where Antigravity traffic goes (default https://daily-cloudcode-pa.googleapis.com)",
+  env: (origin) => {
+    const bundleFile = join(homedir(), ".jev-gateway", "certs", "bundle.pem");
+    return {
+      HTTPS_PROXY: origin,
+      HTTP_PROXY: origin,
+      https_proxy: origin,
+      http_proxy: origin,
+      SSL_CERT_FILE: bundleFile,
+    };
+  },
+  configHelp: (origin) => {
+    const bundleFile = join(homedir(), ".jev-gateway", "certs", "bundle.pem");
+    return (
+      `# Keep the gateway running (jev-agy --start), then run:\n` +
+      `#   HTTPS_PROXY=${origin} HTTP_PROXY=${origin} SSL_CERT_FILE=${bundleFile} agy\n`
+    );
+  },
+};
+
+export const antigravity = {
+  ...agy,
+  name: "jev-antigravity",
+  configHelp: (origin) => {
+    const bundleFile = join(homedir(), ".jev-gateway", "certs", "bundle.pem");
+    return (
+      `# Keep the gateway running (jev-antigravity --start), then run:\n` +
+      `#   HTTPS_PROXY=${origin} HTTP_PROXY=${origin} SSL_CERT_FILE=${bundleFile} agy\n`
+    );
+  },
+};
+
+

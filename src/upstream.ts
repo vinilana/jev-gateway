@@ -47,14 +47,16 @@ export async function forward(
 ): Promise<Response> {
   const url = new URL(incoming.url);
   // The upstream base already ends in its own `/v1`, so that one segment is dropped. Only that
-  // segment: Gemini's `/v1beta/...` is a different prefix and goes upstream as it came.
-  const target = config.upstreamBaseUrl + url.pathname.replace(/^\/v1(?=\/|$)/, "") + url.search;
+  const baseUrl = url.pathname.startsWith("/v1internal") && !config.upstreamBaseUrl.includes("cloudcode")
+    ? (process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL ?? "https://daily-cloudcode-pa.googleapis.com")
+    : config.upstreamBaseUrl;
+  const target = baseUrl.replace(/\/+$/, "") + url.pathname.replace(/^\/v1(?=\/|$)/, "") + url.search;
 
   const headers = new Headers();
   incoming.headers.forEach((value, name) => {
     if (!DROPPED_REQUEST_HEADERS.has(name) && !name.startsWith("x-jev-")) headers.set(name, value);
   });
-  if (config.upstreamApiKey) headers.set("authorization", `Bearer ${config.upstreamApiKey}`);
+  if (config.upstreamApiKey && !url.pathname.startsWith("/v1internal")) headers.set("authorization", `Bearer ${config.upstreamApiKey}`);
   if (typeof options.body === "string") headers.delete("content-encoding");
 
   const hasBody = incoming.method !== "GET" && incoming.method !== "HEAD";
