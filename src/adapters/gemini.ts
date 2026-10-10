@@ -49,17 +49,24 @@ export interface GeminiRequest {
   [key: string]: unknown;
 }
 
+/** The functions the router can offer, and the names of the tools Google runs itself beside them. */
+function visibleTools(tools: GeminiTool[], allowed: Set<string> | undefined) {
+  const declarations = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  // Hosted tools must be counted the same way for routed and baseline requests.
+  const hosted = [...new Set(tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations")))];
+  return { declarations, hosted };
+}
+
+// A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
+const allowedFunctions = (config: { allowedFunctionNames?: string[] } | undefined) =>
+  config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
+
 /** Google Gemini API (`POST /v1beta/models/...:generateContent` and `:streamGenerateContent`). */
 function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.contents)) return { skip: "no_messages" };
   const config = req.toolConfig?.functionCallingConfig;
-  // A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
-  const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
-  const rawDecls = (req.tools ?? []).flatMap((t) => t.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  const { declarations: rawDecls, hosted } = visibleTools(req.tools ?? [], allowedFunctions(config));
   if (rawDecls.length === 0) return { skip: "no_tools" };
-  // Tools Google runs itself (googleSearch, codeExecution, urlContext) are entries without
-  // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
-  const hosted = (req.tools ?? []).flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
 
   const systemParts = (req.systemInstruction?.parts ?? [])
     .map((p) => p.text)
@@ -106,7 +113,7 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
     turns,
     tools: [
       ...rawDecls.map((fn) => ({ kind: "function" as const, name: fn.name, description: fn.description, parameters: fn.parameters })),
-      ...[...new Set(hosted)].map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
+      ...hosted.map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
     ],
     toolChoice,
   };
@@ -172,10 +179,18 @@ function fromUrl(url: URL) {
   return { model: match?.[1], stream: match?.[2] === "streamGenerateContent" };
 }
 
+/** Count individual functions and hosted tools, even when routing is switched off. */
+function metadata(req: GeminiRequest | undefined) {
+  if (!Array.isArray(req?.tools)) return {};
+  const { declarations, hosted } = visibleTools(req.tools, allowedFunctions(req.toolConfig?.functionCallingConfig));
+  return { tools: declarations.length + hosted.length };
+}
+
 export const geminiAdapter: Adapter<GeminiRequest> = {
   toInput,
   apply,
   directJson,
   directStream,
   fromUrl,
+  metadata,
 };

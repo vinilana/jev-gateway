@@ -27,6 +27,8 @@ export interface Config {
   directCalls: boolean;
   /** False starts the gateway as a plain metering proxy; the dashboard can flip it at runtime. */
   routing: boolean;
+  /** Ask Jev and log what it would do, but forward every request as it came, without waiting for it. */
+  shadow: boolean;
   maxStateChars: number;
   maxMessageChars: number;
   /** Opt-in: dump every routed request (decoded body, redacted headers) into this directory. */
@@ -52,16 +54,24 @@ const num = (env: Env, key: string, fallback: number): number => {
   return value;
 };
 
+// A typo must not read as false: "ture" for JEV_SHADOW once turned shadow off and the gateway rewrote requests
+// the user only wanted to observe. Refusing at startup is better than running in a mode nobody asked for.
 const bool = (env: Env, key: string, fallback: boolean): boolean => {
-  const raw = str(env, key)?.toLowerCase();
+  const raw = str(env, key);
   if (raw === undefined) return fallback;
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  const value = raw.toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on") return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") return false;
+  throw new Error(`${key} must be true or false (also 1/0, yes/no, on/off), got "${raw}"`);
 };
 
 export function loadConfig(env: Env = process.env): Config {
   const jevProvider = resolveProvider(env);
   const jevModel = resolveModel(jevProvider, str(env, "JEV_MODEL"));
-  const onNone = str(env, "JEV_ON_NONE") ?? "force_none";
+  const client = str(env, "JEV_CLIENT") ?? "standalone";
+  // The model still called a tool in most "no tool needed" predictions that could be traced to a
+  // conversation, so Codex defaults to leaving the choice to it instead of taking its tools away.
+  const onNone = str(env, "JEV_ON_NONE") ?? (client === "codex" ? "passthrough" : "force_none");
   if (onNone !== "force_none" && onNone !== "passthrough") {
     throw new Error(`JEV_ON_NONE must be "force_none" or "passthrough", got "${onNone}"`);
   }
@@ -82,10 +92,11 @@ export function loadConfig(env: Env = process.env): Config {
     onNone,
     directCalls: bool(env, "JEV_DIRECT_CALLS", true),
     routing: bool(env, "JEV_ROUTING", true),
+    shadow: bool(env, "JEV_SHADOW", false),
     maxStateChars: num(env, "JEV_MAX_STATE_CHARS", 60_000),
     maxMessageChars: num(env, "JEV_MAX_MESSAGE_CHARS", 4_000),
     debugDumpDir: str(env, "JEV_DEBUG_DUMP_DIR"),
-    client: str(env, "JEV_CLIENT") ?? "standalone",
+    client,
     logFile: str(env, "JEV_LOG_FILE"),
   };
   if (config.routerApiKey && !config.upstreamApiKey) {

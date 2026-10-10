@@ -1,6 +1,7 @@
 import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { loadConfig, type Config } from "../src/config.js";
 import { NO_TOOL } from "../src/questions.js";
 import { fakeJev, fakeUpstream, settled, testConfig } from "./helpers.js";
 
@@ -101,7 +102,7 @@ const codexLiteRequest = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function setup(canned: Parameters<typeof fakeJev>[0], reply?: (body: any) => Response) {
+function setup(canned: Parameters<typeof fakeJev>[0], reply?: (body: any) => Response, config: Config = testConfig()) {
   const jev = fakeJev(canned);
   const upstream = fakeUpstream();
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -109,7 +110,7 @@ function setup(canned: Parameters<typeof fakeJev>[0], reply?: (body: any) => Res
     return reply?.(upstream.calls.at(-1)!.body) ?? response;
   }) as typeof fetch;
   const logged: Record<string, unknown>[] = [];
-  const app = createApp({ config: testConfig(), askJev: jev.askJev, fetch: fetchImpl, log: (entry) => logged.push(entry) });
+  const app = createApp({ config, askJev: jev.askJev, fetch: fetchImpl, log: (entry) => logged.push(entry) });
   const post = (body: BodyInit, headers: Record<string, string> = {}) =>
     app.request("/v1/responses", { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
   return { post, jev, upstream, logged };
@@ -187,6 +188,20 @@ describe("POST /v1/responses", () => {
     expect(upstream.calls[0]!.body).toEqual(request);
     await settled();
     expect(logged[0]).toMatchObject({ tools: 3, mode: "passthrough", reason: "codex_auto_review" });
+  });
+
+  it.each<{ case: string; config: Config; headers: Record<string, string>; extra: Record<string, unknown>; reason: string }>([
+    { case: "routing is off", config: testConfig({ routing: false }), headers: {}, extra: {}, reason: "routing_disabled" },
+    { case: "the request opts out by header", config: testConfig(), headers: { "x-jev-gateway": "off" }, extra: {}, reason: "disabled_by_header" },
+    { case: "the request continues a stored response", config: testConfig(), headers: {}, extra: { previous_response_id: "resp_1" }, reason: "previous_response_id" },
+  ])("counts tools declared as input items when $case, without asking Jev", async ({ config, headers, extra, reason }) => {
+    const { post, jev, logged } = setup({}, undefined, config);
+    await post(JSON.stringify(codexLiteRequest(extra)), headers);
+
+    expect(jev.requests).toHaveLength(0);
+    await settled();
+    // The routing-off log is the baseline the dashboard compares routed runs against.
+    expect(logged[0]).toMatchObject({ tools: 3, mode: "passthrough", reason });
   });
 
   it.each([
@@ -365,6 +380,18 @@ describe("POST /v1/responses", () => {
     expect(res.headers.get("x-jev-gateway-reason")).toBe("namespaced_tool_selected");
     expect(upstream.calls).toHaveLength(1);
     expect(upstream.calls[0]!.body.tool_choice).toBe("auto");
+  });
+
+  it("forwards a Codex request intact when Jev predicts no tool is needed", async () => {
+    const codex = loadConfig({ JEV_CLIENT: "codex", UPSTREAM_BASE_URL: "https://llm.test/v1" });
+    const { post, jev, upstream } = setup({ tool: { choice: NO_TOOL }, needs_tool: { noul: 0.1 } }, undefined, codex);
+    const request = codexRequest();
+    const res = await post(JSON.stringify(request));
+
+    expect(jev.requests).toHaveLength(1);
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("no_tool_needed");
+    expect(upstream.calls[0]!.body).toEqual(request);
   });
 
   it.each(["gpt-codex", "codex-auto-review"])("leaves server-side history to %s", async (model) => {

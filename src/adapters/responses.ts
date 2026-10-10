@@ -227,4 +227,12 @@ function directStream(req: ResponsesRequest, call: DirectCall): string {
   );
 }
 
-export const responsesAdapter: Adapter<ResponsesRequest> = { toInput, apply, directJson, directStream };
+/**
+ * The log counts tools for requests that never reach `toInput` (routing off, opted out, stored
+ * history). "Responses-lite" clients leave `tools` out, so `req.tools` alone would report zero.
+ */
+function metadata(req: ResponsesRequest | undefined) {
+  return req ? { tools: toTools(declaredTools(req)).length } : {};
+}
+
+export const responsesAdapter: Adapter<ResponsesRequest> = { toInput, apply, directJson, directStream, metadata };

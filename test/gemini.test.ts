@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { NO_TOOL } from "../src/questions.js";
-import { readUsage } from "../src/usage.js";
+import { readReply } from "../src/usage.js";
 import { fakeJev, fakeUpstream, settled, testConfig } from "./helpers.js";
 
 const geminiRequest = (extra: Record<string, unknown> = {}) => ({
@@ -221,8 +221,50 @@ describe("POST /v1beta/models/...:generateContent", () => {
     expect(question.type === "choice" && Object.keys(question.criteria)).toEqual(["read_file"]);
   });
 
+  it("keeps the URL model when malformed tools prevent reading body metadata", async () => {
+    const logged: Record<string, unknown>[] = [];
+    const upstream = fakeUpstream();
+    const jev = fakeJev({});
+    const app = createApp({ config: testConfig({ routing: false }), askJev: jev.askJev, fetch: upstream.fetchImpl, log: entry => logged.push(entry) });
+    const body = geminiRequest({ tools: [null] });
+    const response = await app.request("/v1beta/models/gemini-fixture:generateContent", { method: "POST", body: JSON.stringify(body) });
+    expect(response.status).toBe(200);
+    await response.json();
+    await settled();
+    expect(upstream.calls[0]!.body).toEqual(body);
+    expect(jev.requests).toEqual([]);
+    expect(logged[0]).toMatchObject({ model: "gemini-fixture", sentModel: "gemini-fixture", reason: "routing_disabled" });
+  });
+
+  const decl = (name: string) => ({ name, parameters: { type: "object", properties: {} } });
+  const toolCases = [
+    { name: "functions grouped in one entry", tools: [{ functionDeclarations: [decl("a"), decl("b")] }], toolConfig: undefined, expected: 2 },
+    { name: "functions beside a hosted tool", tools: [{ functionDeclarations: [decl("a"), decl("b")] }, { googleSearch: {} }], toolConfig: undefined, expected: 3 },
+    {
+      name: "functions narrowed by allowedFunctionNames",
+      tools: [{ functionDeclarations: [decl("a"), decl("b"), decl("c")] }],
+      toolConfig: { functionCallingConfig: { mode: "AUTO", allowedFunctionNames: ["a", "b"] } },
+      expected: 2,
+    },
+  ];
+  it.each([true, false].flatMap((routing) => toolCases.map((tools) => ({ ...tools, routing, mode: routing ? "on" : "off" }))))(
+    "logs $expected tools for $name with routing $mode, the same count whether or not Jev is asked",
+    async ({ tools, toolConfig, expected, routing }) => {
+      const logged: Record<string, unknown>[] = [];
+      const app = createApp({
+        config: testConfig({ routing }), askJev: fakeJev({ tool: { choice: "a" }, needs_tool: { noul: 0.95 } }).askJev,
+        fetch: fakeUpstream().fetchImpl, log: (entry) => logged.push(entry),
+      });
+      await app.request("/v1beta/models/gemini-2.0-flash:generateContent", {
+        method: "POST", body: JSON.stringify(geminiRequest({ tools, toolConfig })),
+      });
+      await settled();
+      expect(logged[0]).toMatchObject({ tools: expected });
+    },
+  );
+
   it("meters a streamed Gemini reply", async () => {
     const body = `data: ${JSON.stringify({ candidates: [], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, cachedContentTokenCount: 64 } })}\n\n`;
-    expect(await readUsage(new Response(body))).toMatchObject({ input: 100, output: 20, cached: 64 });
+    expect((await readReply(new Response(body))).usage).toMatchObject({ input: 100, output: 20, cached: 64 });
   });
 });

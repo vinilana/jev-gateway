@@ -1,6 +1,13 @@
 import type { Decision } from "../decide.js";
 import type { DirectCall, RouterInput } from "../types.js";
 
+/** Request metadata for logs, available even when Jev is not consulted. */
+export interface RequestMetadata {
+  model?: string;
+  stream?: boolean;
+  tools?: number;
+}
+
 /** Translates one client wire format to and from the router's neutral shapes. */
 export interface Adapter<Req extends { model?: string; stream?: boolean }> {
   /** Binary formats decode the body themselves; absent means the router parses JSON. */
@@ -14,6 +21,8 @@ export interface Adapter<Req extends { model?: string; stream?: boolean }> {
   directJson(req: Req, call: DirectCall): object;
   /** The streamed form of the same answer: an SSE body, or a body with its own content type. */
   directStream(req: Req, call: DirectCall, url: URL): string | { body: string | Uint8Array<ArrayBuffer>; contentType: string };
+  /** Count tools without building a router input or consulting Jev. */
+  metadata?(req: Req | undefined, url: URL): RequestMetadata;
   /** For APIs that put the model or the choice to stream in the URL instead of the body (Gemini). */
   fromUrl?(url: URL): { model?: string; stream?: boolean };
 }

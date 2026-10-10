@@ -181,11 +181,12 @@ const REASONS = {
   reserved_tool_name: ["Jev not asked", "A tool is named no_tool_needed, which the router reserves."],
   tool_choice_already_decided: ["Jev not asked", "The client already fixed tool_choice itself."],
   routing_disabled: ["Jev not asked", "Routing is switched off (baseline mode): tokens are metered, Jev is never asked."],
+  shadow: ["Jev asked", "Shadow evaluation recorded Jev's proposal and forwarded the original request."],
   disabled_by_header: ["Jev not asked", "The client sent x-jev-gateway: off."],
   unparseable_body: ["Jev not asked", "The body wasn't readable JSON; upstream gets to reject it."],
   low_confidence: ["Jev asked", "Jev's confidence was below JEV_MIN_CONFIDENCE."],
   jev_answers_disagree: ["Jev asked", "The tool pick and the needs-a-tool check contradicted each other."],
-  no_tool_needed: ["Jev asked", "Jev said no tool is needed; left to the LLM (hint-only request, or JEV_ON_NONE=passthrough)."],
+  no_tool_needed: ["Jev asked", "Jev said no tool is needed; left to the LLM (hint-only request, or JEV_ON_NONE=passthrough, the Codex default)."],
   hosted_tool_selected: ["Jev asked", "Jev picked a provider-run tool, which can't be forced by name."],
   namespaced_tool_selected: ["Jev asked", "Jev picked a namespaced tool, which backends refuse to force."],
   jev_unknown_tool: ["Jev asked", "Jev named a tool that isn't in the roster."],
@@ -278,6 +279,9 @@ function status(source, now) {
   if (asked.length && failed(asked.at(-1))) {
     return ["failing", "!", "Jev is failing", `The latest Jev call failed (${asked.at(-1).reason}). Requests fall back to the LLM.`];
   }
+  if (source.router?.shadow) {
+    return ["baseline", "◌", "Shadow evaluation", "Jev's proposals are recorded. Original requests go to the LLM without rewriting."];
+  }
   const decided = recent.filter(routed).length;
   if (decided) return ["routing", "✓", "Routing", `Jev decided ${decided} of the last ${recent.length} requests (5 min).`];
   const reasons = tally(recent.map((event) => reasonKey(event.reason ?? "unknown")));
@@ -324,11 +328,16 @@ function routingSwitch(source) {
 
 const sum = (events, pick) => events.reduce((total, event) => total + (pick(event) ?? 0), 0);
 
-// Both columns cover everything that went through in that state — passthroughs included — because
+// Each column covers everything that went through in that state — passthroughs included — because
 // that is what each way of working really costs. It only means something if the work is alike.
 function renderCompare(events) {
   const metered = events.filter((event) => event.usage);
-  const groups = [["With Jev routing", metered.filter((event) => !baseline(event))], ["Baseline (routing off)", metered.filter(baseline)]];
+  const shadow = (event) => event.shadowMode || event.reason === "shadow";
+  const groups = [
+    ["With Jev routing", metered.filter((event) => !baseline(event) && !shadow(event))],
+    ["Baseline (routing off)", metered.filter(baseline)],
+  ];
+  if (metered.some(shadow)) groups.push(["Shadow evaluation", metered.filter(shadow)]);
   const per = (group, pick) => (group.length ? sum(group, pick) / group.length : undefined);
   const rows = [
     ["LLM requests metered", (group) => group.length, int],
@@ -344,10 +353,11 @@ function renderCompare(events) {
   $("compare").replaceChildren(
     h("thead", {}, h("tr", {}, h("th", {}, ""), ...groups.map(([label]) => h("th", {}, label)), h("th", {}, "Difference"))),
     h("tbody", {}, ...rows.map(([label, measure, format], index) => {
-      const [withJev, without] = groups.map(([, group]) => measure(group));
+      const values = groups.map(([, group]) => measure(group));
+      const [withJev, without] = values;
       const comparable = index > 0 && index < 6 && withJev !== undefined && without;
       const delta = comparable ? (100 * (withJev - without)) / without : undefined;
-      return h("tr", {}, h("td", {}, label), h("td", {}, cell(withJev, format)), h("td", {}, cell(without, format)),
+      return h("tr", {}, h("td", {}, label), ...values.map((value) => h("td", {}, cell(value, format))),
         h("td", { class: "delta" }, delta === undefined || !Number.isFinite(delta) ? "" : (delta > 0 ? "+" : "") + Math.round(delta) + "%"));
     })),
   );
@@ -485,7 +495,7 @@ function render() {
     .sort((a, b) => at(a) - at(b));
   // Rebuilding charts and rows under the pointer kills hover and text selection, so only do it
   // when they would actually differ (new data, another filter, or the time axis moving on).
-  const next = [view.client, view.range, events.length, events.at(-1)?.time, sources.map((source) => `${source.router?.client}${source.router?.routing}`).join(), Math.floor(now / 30e3)].join("|");
+  const next = [view.client, view.range, events.length, events.at(-1)?.time, sources.map((source) => `${source.router?.client}${source.router?.routing}${source.router?.shadow}`).join(), Math.floor(now / 30e3)].join("|");
   if (next === signature) return;
   signature = next;
   renderControls();

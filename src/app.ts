@@ -1,7 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import { Hono, type Context } from "hono";
-import type { Adapter } from "./adapters/adapter.js";
+import type { Adapter, RequestMetadata } from "./adapters/adapter.js";
 import { chatAdapter } from "./adapters/chat.js";
 import { geminiAdapter } from "./adapters/gemini.js";
 import { exaAdapter } from "./adapters/exa.js";
@@ -13,7 +13,7 @@ import { redactHeaders, summarizeResponse, type Dump } from "./debug.js";
 import { decide, type AskJev, type Decision } from "./decide.js";
 import { createEventLog, type EventLog } from "./events.js";
 import { forward } from "./upstream.js";
-import { readUsage } from "./usage.js";
+import { readReply } from "./usage.js";
 
 export interface Deps {
   config: Config;
@@ -21,6 +21,8 @@ export interface Deps {
   /** Upstream transport; defaults to global fetch. */
   fetch?: typeof fetch;
   log?: (entry: Record<string, unknown>) => void;
+  /** Runtime artifact fingerprint, calculated once by the entry point at startup. */
+  buildId?: string;
   /** What the dashboard shows; defaults to an empty in-memory log. */
   events?: EventLog;
   /** Opt-in wire dumps (see debug.ts); off by default. */
@@ -59,6 +61,22 @@ function parseBody<Req>(bytes: Uint8Array, encoding: string | undefined): Req | 
 // had reached the upstream, so the client got a 500 instead of the reply it paid for.
 const headerSafe = (value: string) => value.replace(/[^\x20-\x7e]+/g, " ");
 
+const routerError = (error: unknown) => `router_error: ${error instanceof Error ? error.message : String(error)}`;
+
+/**
+ * What Jev would have done, for a shadow log line. A direct call's arguments stay out: the
+ * proposal is compared by tool, and no reply was ever built from them.
+ */
+function proposal(decision: Decision) {
+  return {
+    mode: decision.mode,
+    ...("reason" in decision ? { reason: decision.reason } : {}),
+    ...("tool" in decision ? { tool: decision.tool } : {}),
+    ...("kind" in decision ? { kind: decision.kind } : {}),
+    ...("confidence" in decision ? { confidence: decision.confidence } : {}),
+  };
+}
+
 function decisionHeaders(decision: Decision): Record<string, string> {
   const headers: Record<string, string> = { "x-jev-gateway-mode": decision.mode };
   if (decision.mode === "passthrough") headers["x-jev-gateway-reason"] = headerSafe(decision.reason).slice(0, 120);
@@ -72,24 +90,47 @@ function decisionHeaders(decision: Decision): Record<string, string> {
   return headers;
 }
 
-export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: writeLog = () => {}, events = createEventLog(), dump }: Deps) {
+export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: writeLog = () => {}, buildId, events = createEventLog(), dump }: Deps) {
   const app = new Hono();
+  const gatewayRunId = randomUUID();
 
   /** One routed request: a line in the log, and a row on the dashboard. */
   const log = (entry: Record<string, unknown>) => {
-    writeLog(entry);
-    events.record(entry);
+    // Tool arguments belong to the client reply, never to normal logs.
+    const { args: _args, ...metadata } = entry;
+    writeLog(metadata);
+    events.record(metadata);
   };
 
   /**
    * Log a forwarded request once its reply has ended, because that is when the provider says what
    * it cost. The reply is read from a clone in the background, so the client is never delayed.
+   * `signal` is the client's, so a reply it hung up on can be told from one that broke upstream.
+   * `evaluation` is shadow mode's verdict, still pending: the line waits for it, the reply never did.
    */
-  const logWhenDone = (entry: Record<string, unknown>, response: Response, startedAt: number) => {
+  const logWhenDone = (
+    entry: Record<string, unknown>,
+    response: Response,
+    startedAt: number,
+    signal: AbortSignal,
+    evaluation?: Promise<Record<string, unknown>>,
+  ) => {
     const copy = response.clone();
-    void readUsage(copy).then((usage) =>
-      log({ ...entry, status: response.status, durationMs: Math.round(performance.now() - startedAt), ...(usage ? { usage } : {}) }),
-    );
+    void (async () => {
+      const { usage, response: metadata } = await readReply(copy, signal);
+      // Taken before waiting for the evaluation, so the time Jev took is not counted as the reply's.
+      const durationMs = Math.round(performance.now() - startedAt);
+      log({
+        ...entry,
+        ...(await evaluation),
+        ...(entry.mode !== "direct" ? { status: response.status, ...(usage ? { usage } : {}) } : {}),
+        durationMs,
+        ...(metadata ? { response: metadata } : {}),
+      });
+    })().catch(() => {
+      // The client already has its reply. Node ends the process on a rejection nobody handles,
+      // and a log line is not worth that.
+    });
   };
 
   // Routing can be switched off at runtime to measure a baseline: same clients, same traffic,
@@ -141,11 +182,32 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     try {
       return { decision: await decide(input, config, askJev), tools: input.tools.length };
     } catch (error) {
-      return { decision: { mode: "passthrough", reason: `router_error: ${error instanceof Error ? error.message : String(error)}` }, tools: input.tools.length };
+      return { decision: { mode: "passthrough", reason: routerError(error) }, tools: input.tools.length };
     }
   };
 
+  /**
+   * Shadow mode: Jev's verdict as the fields it adds to the log line of a request that has already
+   * gone upstream untouched. A request that never reached Jev keeps its own reason; one that did
+   * reads `shadow`, with the proposal beside it.
+   */
+  const evaluate = async <Req extends AnyRequest>(adapter: Adapter<Req>, req: Req): Promise<Record<string, unknown>> => {
+    const { decision, tools } = await decideFor(adapter, req);
+    const counted = tools === undefined ? {} : { tools };
+    if (decision.mode === "passthrough" && !decision.jev) return { reason: decision.reason, ...counted };
+    return { reason: "shadow", jev: decision.jev, shadow: proposal(decision), ...counted };
+  };
+
   const route = <Req extends AnyRequest>(adapter: Adapter<Req>) => async (c: Context) => {
+    const metadata = (req: Req | undefined, url: URL): RequestMetadata => {
+      let fromUrl: RequestMetadata = {};
+      try {
+        fromUrl = adapter.fromUrl?.(url) ?? {};
+        return { ...fromUrl, ...adapter.metadata?.(req, url) };
+      } catch {
+        return fromUrl;
+      }
+    };
     const startedAt = performance.now();
     const time = new Date().toISOString();
     const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -166,19 +228,38 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     let decision: Decision;
     let tools: number | undefined;
+    let evaluation: Promise<Record<string, unknown>> | undefined;
+    const shadowMode = config.shadow && routing;
     if (!req) decision = { mode: "passthrough", reason: encoding ? "unsupported_encoding" : "unparseable_body" };
     else if (c.req.header("x-jev-gateway") === "off") decision = { mode: "passthrough", reason: "disabled_by_header" };
     else if (!routing) decision = { mode: "passthrough", reason: "routing_disabled" };
-    else ({ decision, tools } = await decideFor(adapter, req));
+    else if (config.shadow) {
+      // Jev only proposes here, so the request must not wait for it: it leaves now, and the
+      // proposal joins the log line when the reply and the answer are both in. A failure is caught
+      // here, not where the line is written: the evaluation settles long before the reply has been
+      // read, and Node ends the process on a rejection that nobody handles in time.
+      evaluation = evaluate(adapter, req).catch((error) => ({ reason: routerError(error) }));
+      decision = { mode: "passthrough", reason: "shadow" };
+    } else ({ decision, tools } = await decideFor(adapter, req));
 
     const url = new URL(c.req.url);
-    const fromUrl = adapter.fromUrl?.(url) ?? {};
-    const entry = { event: "route", time, path: c.req.path, model: req?.model ?? fromUrl.model, tools: tools ?? req?.tools?.length ?? 0 };
+    const requestMetadata = metadata(req, url);
+    const entry = {
+      event: "route",
+      requestId: randomUUID(),
+      gatewayRunId,
+      gatewayBuildId: buildId,
+      shadowMode,
+      time,
+      path: c.req.path,
+      model: req?.model ?? requestMetadata.model,
+      tools: tools ?? requestMetadata.tools ?? req?.tools?.length ?? 0,
+    };
     // Building an answer or a rewrite is the gateway's own work. If it breaks, the original
     // request still goes upstream: the router must never be the reason a request fails.
     const giveUp = (error: unknown): Decision => ({
       mode: "passthrough",
-      reason: `router_error: ${error instanceof Error ? error.message : String(error)}`,
+      reason: routerError(error),
       jev: decision.jev,
     });
 
@@ -186,12 +267,15 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
       try {
         const call = { tool: decision.tool, args: decision.args, inputTokens: decision.jev?.inputTokens ?? 0 };
         const headers = decisionHeaders(decision);
-        const streamed = (fromUrl.stream ?? req.stream) ? adapter.directStream(req, call, url) : undefined;
+        const streamed = (requestMetadata.stream ?? req.stream) ? adapter.directStream(req, call, url) : undefined;
         const json = streamed === undefined ? adapter.directJson(req, call) : undefined;
-        log({ ...entry, ...decision });
-        if (streamed === undefined) return c.json(json, 200, headers);
-        if (typeof streamed !== "string") return c.body(streamed.body, 200, { ...headers, "content-type": streamed.contentType });
-        return c.body(streamed, 200, { ...headers, "content-type": "text/event-stream", "cache-control": "no-cache" });
+        const response = streamed === undefined
+          ? c.json(json, 200, headers)
+          : typeof streamed !== "string"
+            ? c.body(streamed.body, 200, { ...headers, "content-type": streamed.contentType })
+            : c.body(streamed, 200, { ...headers, "content-type": "text/event-stream", "cache-control": "no-cache" });
+        logWhenDone({ ...entry, ...decision }, response, startedAt, c.req.raw.signal);
+        return response;
       } catch (error) {
         decision = giveUp(error);
       }
@@ -217,10 +301,10 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     if (rewrittenBody !== undefined && rewritten && decision.mode !== "passthrough") {
       const response = await forward(c.req.raw, config, fetchImpl, { body: rewrittenBody, responseHeaders: decisionHeaders(decision) });
-      const sent = { mode: decision.mode, model: rewritten.model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
+      const sent = { mode: decision.mode, model: rewritten.model ?? metadata(rewritten, url).model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
       dumpResponse("rejected", response, { sent });
       if (response.status !== 400 && response.status !== 422) {
-        logWhenDone({ ...entry, ...decision }, response, startedAt);
+        logWhenDone({ ...entry, ...decision, sentModel: sent.model }, response, startedAt, c.req.raw.signal);
         return response;
       }
       // The upstream refused the rewritten request (some backends only accept tool_choice
@@ -233,7 +317,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
       body: bytes,
       responseHeaders: decisionHeaders(decision),
     });
-    logWhenDone({ ...entry, ...decision }, response, startedAt);
+    logWhenDone({ ...entry, ...decision, sentModel: entry.model }, response, startedAt, c.req.raw.signal, evaluation);
     dumpResponse("upstream-error", response);
     return response;
   };

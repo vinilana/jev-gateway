@@ -41,6 +41,7 @@ export function dashboardRoutes(config: Config, events: EventLog, routing: Routi
         jevProvider: config.jevProvider,
         minConfidence: config.minConfidence,
         routing: routing.get(),
+        shadow: config.shadow,
         // Sequence numbers restart with the process: a page that sees this change starts over.
         startedAt,
         now: new Date().toISOString(),

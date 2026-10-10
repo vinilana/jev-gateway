@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
+import { readBuildId } from "./build.js";
 import { loadConfig } from "./config.js";
 import { createDump } from "./debug.js";
 import { createAskJev } from "./jev.js";
@@ -9,6 +10,7 @@ const config = loadConfig();
 
 const app = createApp({
   config,
+  buildId: readBuildId(),
   askJev: createAskJev(config),
   dump: createDump(config.debugDumpDir),
   events: createEventLog({ historyFile: config.logFile }),
