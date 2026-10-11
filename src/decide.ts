@@ -126,6 +126,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
   const skip = skipReason(input);
   if (skip) return { mode: "passthrough", reason: skip };
 
+  const directCalls = config.directCalls && input.directCalls !== false;
   const startedAt = performance.now();
   const state = buildState(input, config);
   let tools = input.tools;
@@ -139,7 +140,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
     }
     const built = buildQuestions(tools, {
       allowNone: input.toolChoice !== "required",
-      withArgs: config.directCalls,
+      withArgs: directCalls,
     });
     plans = built.plans;
     result = await askJev({ state, questions: built.questions, model: config.jevModel });
@@ -194,7 +195,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
   // With thinking on, an answer built here carries no thinking block. The client replays it on the
   // next turn, and the API rejects an assistant tool_use that does not start with one: the
   // session would be stuck. So such a request is steered (hint) and the LLM makes the call.
-  if (config.directCalls && resolved && !input.thinking) {
+  if (directCalls && resolved && !input.thinking) {
     return {
       mode: "direct",
       tool: plan.name,

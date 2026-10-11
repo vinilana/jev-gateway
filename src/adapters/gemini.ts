@@ -4,6 +4,7 @@ import { type Adapter, sse } from "./adapter.js";
 
 export interface GeminiPart {
   text?: string;
+  thought?: boolean;
   functionCall?: {
     name: string;
     args?: Record<string, unknown>;
@@ -46,33 +47,108 @@ export interface GeminiRequest {
   systemInstruction?: {
     parts?: Array<{ text?: string }>;
   };
+  /** Cloud Code / internal requests wrap the payload in an inner `request` object. */
+  request?: {
+    model?: string;
+    contents?: GeminiContent[];
+    tools?: GeminiTool[];
+    toolConfig?: GeminiRequest["toolConfig"];
+    systemInstruction?: GeminiRequest["systemInstruction"];
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
-/** Google Gemini API (`POST /v1beta/models/...:generateContent` and `:streamGenerateContent`). */
+function innerRequest(req: GeminiRequest | undefined): GeminiRequest | undefined {
+  if (!req || !("request" in req)) return req;
+  const inner = req.request;
+  return inner && typeof inner === "object" && !Array.isArray(inner) ? inner : undefined;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+function isGeminiPart(value: unknown): value is GeminiPart {
+  if (!isRecord(value)) return false;
+  if (value.thought !== undefined && typeof value.thought !== "boolean") return false;
+  if (value.text !== undefined && typeof value.text !== "string") return false;
+  const functionCall = value.functionCall;
+  if (
+    functionCall !== undefined &&
+    (!isRecord(functionCall) || typeof functionCall.name !== "string" ||
+      (functionCall.args !== undefined && !isRecord(functionCall.args)))
+  ) return false;
+  const functionResponse = value.functionResponse;
+  if (
+    functionResponse !== undefined &&
+    (!isRecord(functionResponse) || typeof functionResponse.name !== "string" ||
+      (functionResponse.response !== undefined && !isRecord(functionResponse.response)))
+  ) return false;
+  return true;
+}
+
+function isGeminiContent(value: unknown): value is GeminiContent {
+  if (!isRecord(value)) return false;
+  if (value.role !== undefined && typeof value.role !== "string") return false;
+  return value.parts === undefined || (Array.isArray(value.parts) && value.parts.every(isGeminiPart));
+}
+
+function isFunctionDeclaration(value: unknown): value is GeminiFunctionDeclaration {
+  if (!isRecord(value) || typeof value.name !== "string") return false;
+  if (value.description !== undefined && typeof value.description !== "string") return false;
+  return value.parameters === undefined || isRecord(value.parameters);
+}
+
+function isGeminiTool(value: unknown): value is GeminiTool {
+  if (!isRecord(value)) return false;
+  const declarations = value.functionDeclarations;
+  return declarations === undefined || (Array.isArray(declarations) && declarations.every(isFunctionDeclaration));
+}
+
 function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
-  if (!Array.isArray(req.contents)) return { skip: "no_messages" };
-  const config = req.toolConfig?.functionCallingConfig;
+  const inner = innerRequest(req);
+  if (!inner) return { skip: "malformed_envelope" };
+  const rawContents: unknown = inner.contents;
+  if (rawContents === undefined) return { skip: "no_messages" };
+  if (!Array.isArray(rawContents) || !rawContents.every(isGeminiContent)) return { skip: "unreadable_request" };
+  const contents = rawContents as GeminiContent[];
+  const toolConfig = inner.toolConfig;
+  const config = toolConfig?.functionCallingConfig;
   // A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
   const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
-  const rawDecls = (req.tools ?? []).flatMap((t) => t.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  const rawTools: unknown = inner.tools ?? [];
+  if (!Array.isArray(rawTools) || !rawTools.every(isGeminiTool)) return { skip: "unreadable_request" };
+  const tools = rawTools as GeminiTool[];
+  const rawDecls = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
   if (rawDecls.length === 0) return { skip: "no_tools" };
   // Tools Google runs itself (googleSearch, codeExecution, urlContext) are entries without
   // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
-  const hosted = (req.tools ?? []).flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
+  const hosted = tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
 
-  const systemParts = (req.systemInstruction?.parts ?? [])
-    .map((p) => p.text)
-    .filter((t): t is string => typeof t === "string" && t.length > 0);
-  const system = truncate(systemParts.join("\n\n"), maxMessageChars);
+  const systemInstruction: unknown = inner.systemInstruction;
+  if (
+    systemInstruction !== undefined &&
+    (!isRecord(systemInstruction) ||
+      (systemInstruction.parts !== undefined &&
+        (!Array.isArray(systemInstruction.parts) || !systemInstruction.parts.every(isGeminiPart))))
+  ) return { skip: "unreadable_request" };
+  const systemParts = isRecord(systemInstruction) && Array.isArray(systemInstruction.parts) ? systemInstruction.parts : [];
+  const system = truncate(
+    systemParts
+      .map((part) => part.text)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .join("\n\n"),
+    maxMessageChars,
+  );
 
   const turns: RouterInput["turns"] = [];
-  for (const content of req.contents) {
+  for (const content of contents) {
     const role = content.role === "model" ? "assistant" : "user";
     const textParts: string[] = [];
     const toolCalls: Array<{ tool: string; arguments: string }> = [];
 
     for (const part of content.parts ?? []) {
+      if (part.thought === true) continue;
       if (part.text) {
         textParts.push(part.text);
       } else if (part.functionCall) {
@@ -108,15 +184,18 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
       ...rawDecls.map((fn) => ({ kind: "function" as const, name: fn.name, description: fn.description, parameters: fn.parameters })),
       ...[...new Set(hosted)].map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
     ],
+    // Gemini replays provider signatures on later turns; synthetic calls cannot carry them.
+    directCalls: false,
     toolChoice,
   };
 }
 
 function apply(req: GeminiRequest, decision: Parameters<Adapter<GeminiRequest>["apply"]>[1]): GeminiRequest {
   const clone = structuredClone(req);
+  const target = clone.request && typeof clone.request === "object" ? clone.request : clone;
   if (decision.mode === "forced") {
-    clone.toolConfig = {
-      ...clone.toolConfig,
+    target.toolConfig = {
+      ...target.toolConfig,
       functionCallingConfig: {
         mode: "ANY",
         allowedFunctionNames: [decision.tool],
@@ -125,8 +204,8 @@ function apply(req: GeminiRequest, decision: Parameters<Adapter<GeminiRequest>["
     return clone;
   }
   if (decision.mode === "none") {
-    clone.toolConfig = {
-      ...clone.toolConfig,
+    target.toolConfig = {
+      ...target.toolConfig,
       functionCallingConfig: {
         mode: "NONE",
       },
@@ -136,7 +215,7 @@ function apply(req: GeminiRequest, decision: Parameters<Adapter<GeminiRequest>["
   return clone;
 }
 
-function directJson(req: GeminiRequest, call: DirectCall): object {
+function directJson(_req: GeminiRequest, call: DirectCall): object {
   return {
     candidates: [
       {
@@ -160,22 +239,39 @@ function directJson(req: GeminiRequest, call: DirectCall): object {
   };
 }
 
-/** `streamGenerateContent` streams SSE only with `?alt=sse`; without it, the reply is a JSON array of chunks. */
+/** `streamGenerateContent` returns SSE only when its URL asks for `alt=sse`; otherwise it is a JSON array. */
 function directStream(req: GeminiRequest, call: DirectCall, url: URL) {
   const chunk = JSON.stringify(directJson(req, call));
-  return url.searchParams.get("alt") === "sse" ? sse([{ data: chunk }]) : { body: `[${chunk}]`, contentType: "application/json" };
+  return url.searchParams.get("alt") === "sse"
+    ? sse([{ data: chunk }])
+    : { body: `[${chunk}]`, contentType: "application/json" };
 }
 
-/** Gemini names the model and chooses streaming in the path: `/v1beta/models/<model>:streamGenerateContent`. */
-function fromUrl(url: URL) {
-  const match = /\/models\/([^/:]+):(\w+)/.exec(url.pathname);
-  return { model: match?.[1], stream: match?.[2] === "streamGenerateContent" };
+/** Model metadata lives in the Gemini path or the Cloud Code envelope. */
+function metadata(req: GeminiRequest | undefined, url: URL) {
+  const beta = /^\/v1beta\/models\/([^/:]+)(?::|$)/.exec(url.pathname);
+  const inner = innerRequest(req);
+  const model = typeof inner?.model === "string" ? inner.model : beta?.[1];
+  const toolGroups = Array.isArray(inner?.tools) ? inner.tools.filter(isGeminiTool) : undefined;
+  const config = inner?.toolConfig?.functionCallingConfig;
+  const rawAllowedNames: unknown = config?.allowedFunctionNames;
+  const allowedNames =
+    Array.isArray(rawAllowedNames) && rawAllowedNames.every((name): name is string => typeof name === "string")
+      ? rawAllowedNames
+      : undefined;
+  const allowed = allowedNames?.length ? new Set(allowedNames) : undefined;
+  const tools = toolGroups
+    ? toolGroups.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name)).length +
+      new Set(toolGroups.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"))).size
+    : undefined;
+  return { model, tools };
 }
 
+/** Google Gemini API and Cloud Code (`/v1beta/models/...`, `/v1internal:streamGenerateContent`). */
 export const geminiAdapter: Adapter<GeminiRequest> = {
   toInput,
   apply,
   directJson,
   directStream,
-  fromUrl,
+  metadata,
 };

@@ -341,3 +341,37 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
+/** Antigravity CLI uses Gemini when settings.json selects that provider; otherwise it uses Cloud Code. */
+function antigravityUpstream(settingsPath = join(homedir(), ".gemini", "antigravity-cli", "settings.json")) {
+  if (process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL) return process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL;
+  try {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    if (settings.modelProvider === "gemini") {
+      return "https://generativelanguage.googleapis.com";
+    }
+  } catch {
+    // No readable settings: default to Cloud Code upstream.
+  }
+  return "https://daily-cloudcode-pa.googleapis.com";
+}
+
+export const antigravity = {
+  name: "jev-antigravity",
+  client: "agy",
+  portEnv: "JEV_ANTIGRAVITY_PORT",
+  defaultPort: 8795,
+  upstream: antigravityUpstream,
+  upstreamHelp:
+    "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL   where Antigravity traffic goes; default follows settings.json:\n" +
+    "                                      missing/cloudcode provider → https://daily-cloudcode-pa.googleapis.com\n" +
+    "                                      modelProvider=gemini       → https://generativelanguage.googleapis.com",
+  env: (origin) => ({
+    CLOUD_CODE_URL: origin,
+    GOOGLE_GEMINI_BASE_URL: origin,
+  }),
+  configHelp: (origin) =>
+    `# Keep the gateway running (jev-antigravity --start), then either:\n` +
+    `#   CLOUD_CODE_URL=${origin} agy\n` +
+    `# or with settings.json modelProvider: "gemini" and GEMINI_API_KEY set:\n` +
+    `#   GOOGLE_GEMINI_BASE_URL=${origin} agy\n`,
+};

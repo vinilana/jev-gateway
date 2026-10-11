@@ -66,6 +66,34 @@ describe("readUsage", () => {
     expect(usage).toEqual({ input: 100, cached: 64, cacheWrite: 0, output: 20, reasoning: 8 });
   });
 
+  it("includes Gemini thoughts in output and reports them as reasoning", async () => {
+    const usage = await readUsage(
+      Response.json({
+        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 64, thoughtsTokenCount: 297, cachedContentTokenCount: 80 },
+      }),
+    );
+    expect(usage).toEqual({ input: 100, cached: 80, cacheWrite: 0, output: 361, reasoning: 297 });
+  });
+
+  it("reads the final token totals from a Gemini JSON-array stream", async () => {
+    const usage = await readUsage(Response.json([
+      { usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 1, thoughtsTokenCount: 64, cachedContentTokenCount: 64 } },
+      { candidates: [{ content: { parts: [{ text: "done" }] } }] },
+      { usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 64, thoughtsTokenCount: 297, cachedContentTokenCount: 64 } },
+    ]));
+    expect(usage).toEqual({ input: 100, cached: 64, cacheWrite: 0, output: 361, reasoning: 297 });
+  });
+
+  it.each(["json", "sse", "array"])("reads Cloud Code token usage from a %s response envelope", async (format) => {
+    const reply = {
+      response: {
+        usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 64, thoughtsTokenCount: 297, cachedContentTokenCount: 800 },
+      },
+    };
+    const response = format === "sse" ? sse([reply]) : Response.json(format === "array" ? [reply] : reply);
+    expect(await readUsage(response)).toEqual({ input: 1000, cached: 800, cacheWrite: 0, output: 361, reasoning: 297 });
+  });
+
   it("reports nothing rather than zeros when the reply never said", async () => {
     expect(await readUsage(new Response("<html>bad gateway</html>", { status: 502 }))).toBeUndefined();
   });

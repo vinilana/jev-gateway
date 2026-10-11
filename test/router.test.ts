@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { Hono } from "hono";
+import { RegExpRouter } from "hono/router/reg-exp-router";
 import { createApp } from "../src/app.js";
 import { chatAdapter } from "../src/adapters/chat.js";
 import { NO_TOOL, planTool } from "../src/questions.js";
@@ -27,6 +29,37 @@ function setup(canned: Parameters<typeof fakeJev>[0], config = testConfig()) {
     });
   return { app, post, jev, upstream };
 }
+
+describe("opaque internal routes", () => {
+  it("keeps internal path boundaries literal without relying on Hono's fallback router", async () => {
+    const { app, jev, upstream } = setup({}, testConfig({ upstreamBaseUrl: "https://cloudcode.test" }));
+    const routed = new Hono({ router: new RegExpRouter() });
+    // Hono's two routers interpret `:*` differently; route registration must work with either.
+    expect(() => {
+      for (const route of app.routes) routed.on(route.method, route.path, route.handler);
+    }).not.toThrow();
+
+    for (const path of ["/v1internal:loadCodeAssist", "/v1internal:x/y", "/v1internal/agentPlugins"]) {
+      const response = await routed.request(path, {
+        method: "POST",
+        headers: { authorization: "Bearer fixture" },
+        body: "{}",
+      });
+      expect(response.status).toBe(200);
+      expect(upstream.calls.at(-1)?.url).toBe("https://cloudcode.test" + path);
+      expect(upstream.calls.at(-1)?.headers.get("authorization")).toBe("Bearer fixture");
+    }
+    expect(upstream.calls).toHaveLength(3);
+    const unknown = await routed.request("/v1internalfoo", {
+      method: "POST",
+      headers: { authorization: "Bearer fixture" },
+      body: "{}",
+    });
+    expect(unknown.status).toBe(404);
+    expect(upstream.calls).toHaveLength(3);
+    expect(jev.requests).toHaveLength(0);
+  });
+});
 
 describe("planTool", () => {
   it("marks a tool closed-set only when every parameter is an enum, boolean or const", () => {
@@ -217,6 +250,26 @@ describe("POST /v1/chat/completions", () => {
 });
 
 describe("gateway", () => {
+  it("does not proxy unknown /v1beta1 paths with the client's credentials", async () => {
+    const upstream = fakeUpstream();
+    const jev = fakeJev({});
+    const app = createApp({
+      config: testConfig({ upstreamBaseUrl: "https://cloudcode.test" }),
+      askJev: jev.askJev,
+      fetch: upstream.fetchImpl,
+    });
+
+    const response = await app.request("/v1beta1/projects/test/locations/global", {
+      method: "POST",
+      headers: { authorization: "Bearer client-oauth-token" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(404);
+    expect(upstream.calls).toHaveLength(0);
+    expect(jev.requests).toHaveLength(0);
+  });
+
   it("leaves internal review unchanged in both forwarded requests and decision previews", async () => {
     const { app, post, jev, upstream } = setup(lightsAnswers);
     const body = chat("Review the synthetic command.", { model: "codex-auto-review" });

@@ -13,7 +13,7 @@ export interface Usage {
   cached: number;
   /** Part of `input` written to the prompt cache (Anthropic only; billed at a premium). */
   cacheWrite: number;
-  /** Part of `output` spent on hidden reasoning, when the provider says (OpenAI). */
+  /** Part of `output` spent on hidden reasoning, when the provider reports it. */
   reasoning: number;
 }
 
@@ -39,7 +39,8 @@ function merge(into: Partial<Usage>, raw: Raw): void {
   } else if ("promptTokenCount" in raw || "candidatesTokenCount" in raw) {
     // Google Gemini API (usageMetadata)
     into.input = num(raw.promptTokenCount);
-    into.output = num(raw.candidatesTokenCount);
+    into.reasoning = num(raw.thoughtsTokenCount);
+    into.output = num(raw.candidatesTokenCount) + into.reasoning;
     into.cached = num(raw.cachedContentTokenCount);
   } else {
     // Responses API — or Anthropic's message_delta, which only updates the output count.
@@ -55,6 +56,10 @@ function merge(into: Partial<Usage>, raw: Raw): void {
 }
 
 function collect(payload: unknown, into: Partial<Usage>): void {
+  if (Array.isArray(payload)) {
+    for (const item of payload) collect(item, into);
+    return;
+  }
   const root = obj(payload);
   // Where each API keeps it: top level (JSON replies, chat chunks, message_delta),
   // `response.usage` (Responses events), `message.usage` (Anthropic message_start), `usageMetadata` (Gemini).

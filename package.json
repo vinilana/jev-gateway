@@ -1,7 +1,7 @@
 {
   "name": "jev-gateway",
   "version": "0.5.1",
-  "description": "Local LLM gateway that lets TypeSafe's Jev model pick the tool for coding agents. Launchers for Codex, Claude Code, OpenCode, Kilo, Gemini and Devin, with a monitoring dashboard.",
+  "description": "Local LLM gateway that lets TypeSafe's Jev model pick the tool for coding agents. Launchers for Codex, Claude Code, OpenCode, Kilo, Gemini, Devin and Antigravity, with a monitoring dashboard.",
   "keywords": [
     "llm",
     "gateway",
@@ -15,6 +15,7 @@
     "kilo",
     "gemini",
     "devin",
+    "antigravity",
     "openai",
     "anthropic"
   ],
@@ -38,7 +39,9 @@
     "jev-opencode": "bin/jev-opencode.mjs",
     "jev-gemini": "bin/jev-gemini.mjs",
     "jev-devin": "bin/jev-devin.mjs",
-    "jev-kilo": "bin/jev-kilo.mjs"
+    "jev-kilo": "bin/jev-kilo.mjs",
+    "jev-antigravity": "bin/jev-antigravity.mjs",
+    "jev-agy": "bin/jev-antigravity.mjs"
   },
   "files": [
     "dist",
@@ -59,7 +62,9 @@
     "kilo": "node bin/jev-kilo.mjs",
     "gemini": "node bin/jev-gemini.mjs",
     "devin": "node bin/jev-devin.mjs",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
+    "antigravity": "node bin/jev-antigravity.mjs",
+    "agy": "node bin/jev-antigravity.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
