@@ -593,6 +593,11 @@ Once an `agent_message` item is in the input, every later request in the same co
 it. Passthrough therefore lasts for the rest of that conversation, so a subagent session is never
 routed by Jev.
 
+Requests whose model is exactly `codex-auto-review` bypass Jev with reason `codex_auto_review`.
+Codex's internal reviewer receives the original request and chooses its own tools. Similar model
+names still route normally. Routing opt-outs and the Responses history and `agent_message` checks
+keep their existing reasons.
+
 Tool lists longer than 120 entries (Claude Code sends about 280) take two Jev calls. The first ranks
 the list in groups. The second decides among the top 3 of each group, using full descriptions.
 

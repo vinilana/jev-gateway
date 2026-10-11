@@ -1,6 +1,6 @@
 {
   "name": "jev-gateway",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Local LLM gateway that lets TypeSafe's Jev model pick the tool for coding agents. Launchers for Codex, Claude Code, OpenCode, Kilo, Gemini, Devin and Antigravity, with a monitoring dashboard.",
   "keywords": [
     "llm",

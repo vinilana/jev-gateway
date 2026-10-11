@@ -270,6 +270,20 @@ describe("gateway", () => {
     expect(jev.requests).toHaveLength(0);
   });
 
+  it("leaves internal review unchanged in both forwarded requests and decision previews", async () => {
+    const { app, post, jev, upstream } = setup(lightsAnswers);
+    const body = chat("Review the synthetic command.", { model: "codex-auto-review" });
+    const res = await post(body);
+
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("codex_auto_review");
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]!.body).toEqual(body);
+    const decision = await app.request("/router/decide", { method: "POST", body: JSON.stringify(body) });
+    expect(await decision.json()).toEqual({ mode: "passthrough", reason: "codex_auto_review" });
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls).toHaveLength(1);
+  });
+
   it("proxies other /v1 routes and swaps in the upstream key", async () => {
     const upstream = fakeUpstream({ data: [] });
     const app = createApp({

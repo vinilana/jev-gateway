@@ -134,6 +134,10 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
       return { decision: { mode: "passthrough", reason: "unreadable_request" } };
     }
     if ("skip" in input) return { decision: { mode: "passthrough", reason: input.skip } };
+    // Codex's internal reviewer must keep control of its own tool selection.
+    if (req.model === "codex-auto-review") {
+      return { decision: { mode: "passthrough", reason: "codex_auto_review" }, tools: input.tools.length };
+    }
     try {
       return { decision: await decide(input, config, askJev), tools: input.tools.length };
     } catch (error) {

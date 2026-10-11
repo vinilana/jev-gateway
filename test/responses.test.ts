@@ -116,6 +116,118 @@ function setup(canned: Parameters<typeof fakeJev>[0], reply?: (body: any) => Res
 }
 
 describe("POST /v1/responses", () => {
+  it.each([
+    { compressed: false, stream: false },
+    { compressed: false, stream: true },
+    { compressed: true, stream: false },
+    { compressed: true, stream: true },
+  ])("forwards internal review untouched (compressed: $compressed, stream: $stream)", async ({ compressed, stream }) => {
+    const request = codexRequest({
+      model: "codex-auto-review",
+      instructions: "Review the synthetic read-only command under the supplied permissions.",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "May the agent read fixture.txt?" }] }],
+      tool_choice: "required",
+      stream,
+    });
+    const raw = Buffer.from(JSON.stringify(request, null, 2) + "\n");
+    const body = compressed ? zstdCompressSync(raw) : raw;
+    const completion = { id: "resp_review", output: [], usage: { input_tokens: 12, output_tokens: 3 } };
+    const reply = stream
+      ? `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: completion })}\n\ndata: [DONE]\n\n`
+      : JSON.stringify(completion);
+    const contentType = stream ? "text/event-stream" : "application/json";
+    const jev = fakeJev({ tool: { choice: "shell" }, needs_tool: { noul: 0.9 } });
+    const seen: { url: string; body: unknown; headers: Headers }[] = [];
+    const app = createApp({
+      config: testConfig({ argsModel: "cheap-args" }),
+      askJev: jev.askJev,
+      fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(url), body: init?.body, headers: new Headers(init?.headers) });
+        return new Response(reply, { headers: { "content-type": contentType } });
+      }) as typeof fetch,
+    });
+    const res = await app.request("/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", authorization: "Bearer synthetic-client",
+        ...(compressed ? { "content-encoding": "zstd" } : {}),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("codex_auto_review");
+    expect(jev.requests).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("https://llm.test/v1/responses");
+    expect(Buffer.from(seen[0]!.body as Uint8Array).equals(body)).toBe(true);
+    expect(seen[0]!.headers.get("content-encoding")).toBe(compressed ? "zstd" : null);
+    expect(seen[0]!.headers.get("authorization")).toBe("Bearer synthetic-client");
+    expect(res.headers.get("content-type")).toBe(contentType);
+    expect(await res.text()).toBe(reply);
+    await settled();
+    const feed = await (await app.request("/dashboard/events")).json() as { events: Record<string, unknown>[] };
+    expect(feed.events).toHaveLength(1);
+    expect(feed.events[0]).toMatchObject({
+      model: "codex-auto-review", tools: 4, mode: "passthrough", reason: "codex_auto_review", status: 200,
+      usage: { input: 12, output: 3 },
+    });
+    expect(feed.events[0]!.jev).toBeUndefined();
+  });
+
+  it("keeps internal review tools declared in input items and counts them in the log", async () => {
+    const { post, jev, upstream, logged } = setup({ tool: { choice: "exec" }, needs_tool: { noul: 0.9 } });
+    const request = codexLiteRequest({ model: "codex-auto-review" });
+    const res = await post(JSON.stringify(request));
+
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("codex_auto_review");
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]!.body).toEqual(request);
+    await settled();
+    expect(logged[0]).toMatchObject({ tools: 3, mode: "passthrough", reason: "codex_auto_review" });
+  });
+
+  it.each([
+    "codex-auto-review-preview", "prefix-codex-auto-review", "CODEX-AUTO-REVIEW", " codex-auto-review", "codex-auto-review ",
+  ])("still routes a similar model name through Jev: %j", async (model) => {
+    const { post, jev, upstream } = setup({ tool: { choice: "shell" }, needs_tool: { noul: 0.9 } });
+    const res = await post(JSON.stringify(codexRequest({ model })));
+
+    expect(jev.requests).toHaveLength(1);
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("forced");
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]!.body.model).toBe(model);
+    expect(upstream.calls[0]!.body.tool_choice).toEqual({ type: "function", name: "shell" });
+  });
+
+  it.each([
+    { source: "config", reason: "routing_disabled" },
+    { source: "header", reason: "disabled_by_header" },
+    { source: "dashboard", reason: "routing_disabled" },
+  ])("keeps the routing control's reason for internal review ($source)", async ({ source, reason }) => {
+    const jev = fakeJev({});
+    const upstream = fakeUpstream();
+    const app = createApp({ config: testConfig({ routing: source !== "config" }), askJev: jev.askJev, fetch: upstream.fetchImpl });
+    if (source === "dashboard") {
+      expect((await app.request("/dashboard/routing?enabled=false", { method: "POST" })).status).toBe(200);
+    }
+    const request = codexRequest({ model: "codex-auto-review" });
+    const res = await app.request("/v1/responses", {
+      method: "POST",
+      headers: source === "header" ? { "x-jev-gateway": "off" } : {},
+      body: JSON.stringify(request),
+    });
+
+    expect(res.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(res.headers.get("x-jev-gateway-reason")).toBe(reason);
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]!.body).toEqual(request);
+    expect(upstream.calls[0]!.headers.has("x-jev-gateway")).toBe(false);
+  });
+
   it("gives Jev a readable transcript and every tool, including free-form and provider-run ones", async () => {
     const { post, jev } = setup({ tool: { choice: "shell" }, needs_tool: { noul: 0.9 } });
     await post(JSON.stringify(codexRequest()));
@@ -255,16 +367,16 @@ describe("POST /v1/responses", () => {
     expect(upstream.calls[0]!.body.tool_choice).toBe("auto");
   });
 
-  it("stays out of the way when history lives server-side", async () => {
+  it.each(["gpt-codex", "codex-auto-review"])("leaves server-side history to %s", async (model) => {
     const { post, jev } = setup({});
-    const res = await post(JSON.stringify(codexRequest({ previous_response_id: "resp_123" })));
+    const res = await post(JSON.stringify(codexRequest({ model, previous_response_id: "resp_123" })));
     expect(jev.requests).toHaveLength(0);
     expect(res.headers.get("x-jev-gateway-reason")).toBe("previous_response_id");
   });
 
-  it("leaves agent messages to the model even when their content is readable", async () => {
+  it.each(["gpt-codex", "codex-auto-review"])("leaves readable agent messages to %s", async (model) => {
     const { post, jev, upstream } = setup({ tool: { choice: NO_TOOL }, needs_tool: { noul: 0.1 } });
-    const request = codexRequest();
+    const request = codexRequest({ model });
     const body = {
       ...request,
       input: [...request.input, {
@@ -283,8 +395,13 @@ describe("POST /v1/responses", () => {
     expect(upstream.calls[0]!.body).toEqual(body);
   });
 
-  it.each([false, true])("forwards encrypted agent messages untouched (compressed: %s)", async (compressed) => {
-    const request = codexLiteRequest({ model: "gpt-5.6-luna" });
+  it.each([
+    { model: "gpt-5.6-luna", compressed: false },
+    { model: "gpt-5.6-luna", compressed: true },
+    { model: "codex-auto-review", compressed: false },
+    { model: "codex-auto-review", compressed: true },
+  ])("forwards encrypted agent messages untouched (model: $model, compressed: $compressed)", async ({ model, compressed }) => {
+    const request = codexLiteRequest({ model });
     const raw = Buffer.from(JSON.stringify({
       ...request,
       input: [...request.input, {
