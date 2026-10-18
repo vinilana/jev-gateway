@@ -31,6 +31,8 @@ export interface Config {
   shadow: boolean;
   maxStateChars: number;
   maxMessageChars: number;
+  /** Most images one Jev call may carry, newest first; 0 keeps every image a placeholder. */
+  maxImages: number;
   /** Opt-in: dump every routed request (decoded body, redacted headers) into this directory. */
   debugDumpDir?: string;
   /** Who this router serves ("codex", "claude"); the dashboard labels its traffic with it. */
@@ -95,6 +97,7 @@ export function loadConfig(env: Env = process.env): Config {
     shadow: bool(env, "JEV_SHADOW", false),
     maxStateChars: num(env, "JEV_MAX_STATE_CHARS", 60_000),
     maxMessageChars: num(env, "JEV_MAX_MESSAGE_CHARS", 4_000),
+    maxImages: num(env, "JEV_MAX_IMAGES", 2),
     debugDumpDir: str(env, "JEV_DEBUG_DUMP_DIR"),
     client,
     logFile: str(env, "JEV_LOG_FILE"),
@@ -105,6 +108,7 @@ export function loadConfig(env: Env = process.env): Config {
   for (const [key, value, minimum] of [
     ["JEV_MAX_STATE_CHARS", config.maxStateChars, 64],
     ["JEV_MAX_MESSAGE_CHARS", config.maxMessageChars, 1],
+    ["JEV_MAX_IMAGES", config.maxImages, 0],
   ] as const) {
     if (!Number.isSafeInteger(value) || value < minimum) {
       throw new Error(`${key} must be an integer of at least ${minimum}, got "${env[key] ?? value}"`);

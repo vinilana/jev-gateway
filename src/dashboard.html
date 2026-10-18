@@ -464,12 +464,12 @@ function renderRows(events) {
       h("td", { class: "num" }, (event.confidence ?? event.jev?.confidence)?.toFixed(2) ?? "–"),
       h("td", { class: "reason-cell", title: event.reason }, event.reason ?? ""),
       h("td", { class: "num" }, event.status === undefined ? "–" : String(event.status)),
-      h("td", { class: "num" }, event.jev ? int(event.jev.latencyMs) : "–"),
+      h("td", { class: "num", title: event.jev?.images ? `Jev saw ${int(event.jev.images)} image${event.jev.images === 1 ? "" : "s"}` : undefined }, event.jev ? int(event.jev.latencyMs) : "–"),
       h("td", { class: "num", title: event.usage ? `${int(event.usage.cached)} cached, ${int(event.usage.cacheWrite)} written to cache` : undefined }, event.usage ? int(event.usage.input) : "–"),
       h("td", { class: "num", title: event.usage ? `${int(event.usage.reasoning)} reasoning` : undefined }, event.usage ? int(event.usage.output) : "–"),
       h("td", { class: "num" }, event.durationMs === undefined ? "–" : (event.durationMs / 1000).toFixed(1)));
   }));
-  $("note").textContent = `Newest first, up to ${MAX_ROWS}. Dimmed rows are from before the router's last restart; a tool in brackets is what Jev picked when the LLM still made the call. A request appears once its reply has finished, which is when the provider reports its tokens (hover In/Out for cache and reasoning).`;
+  $("note").textContent = `Newest first, up to ${MAX_ROWS}. Dimmed rows are from before the router's last restart; a tool in brackets is what Jev picked when the LLM still made the call. A request appears once its reply has finished, which is when the provider reports its tokens (hover In/Out for cache and reasoning, Jev ms for the images Jev saw).`;
 }
 
 function renderControls() {

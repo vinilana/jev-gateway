@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Decision } from "../decide.js";
+import { collectImages } from "../images.js";
 import { textOf } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
@@ -50,6 +51,7 @@ function toTools(raw: MessagesTool[]): RouterTool[] {
 function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
 
+  const images = collectImages();
   const toolNameById = new Map<string, string>();
   const turns: Turn[] = [];
   for (const message of req.messages) {
@@ -60,7 +62,7 @@ function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | {
     // One message can interleave prose, tool calls and tool results; Jev reads them as separate turns.
     const text: Block[] = [];
     const flushText = () => {
-      if (text.length) turns.push({ role: message.role, text: textOf(text.splice(0)) });
+      if (text.length) turns.push({ role: message.role, text: textOf(text.splice(0), images) });
     };
     for (const block of message.content ?? []) {
       if (block.type === "tool_use" || block.type === "server_tool_use") {
@@ -76,7 +78,7 @@ function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | {
           role: "tool_result",
           ...(typeof block.tool_use_id === "string" ? { call_id: block.tool_use_id } : {}),
           tool: toolNameById.get(block.tool_use_id ?? "") ?? "unknown",
-          content: textOf(block.content),
+          content: textOf(block.content, images),
         });
       } else if (block.type !== "thinking" && block.type !== "redacted_thinking") {
         text.push(block);
@@ -98,6 +100,7 @@ function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | {
     toolChoice: choice === "auto" ? "auto" : choice === "any" ? "required" : "decided",
     steer: thinking || cached ? "hint" : "tool_choice",
     thinking,
+    images,
   };
 }
 

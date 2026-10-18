@@ -24,7 +24,7 @@ export interface RouteEvent {
   /** What the LLM call cost, as the provider reported it; absent for `direct` and failed calls. */
   usage?: { input: number; output: number; cached: number; cacheWrite: number; reasoning: number };
   /** Present whenever Jev answered, even if the router then let the LLM decide. */
-  jev?: { choice: string; confidence: number; latencyMs: number; inputTokens: number; shortlist?: string[] };
+  jev?: { choice: string; confidence: number; latencyMs: number; inputTokens: number; shortlist?: string[]; images?: number };
 }
 
 export interface EventLog {
@@ -73,6 +73,7 @@ function toEvent(entry: Record<string, unknown>, seq: number): RouteEvent | unde
       latencyMs: number(jev.latencyMs) ?? 0,
       inputTokens: number(jev.inputTokens) ?? 0,
       shortlist: Array.isArray(jev.shortlist) ? jev.shortlist.flatMap((name) => text(name) ?? []) : undefined,
+      images: number(jev.images),
     },
   };
 }

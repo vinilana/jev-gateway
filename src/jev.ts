@@ -1,6 +1,7 @@
-import type { Questions, SystemOneRequest, SystemOneResult } from "@typesafe-ai/sdk";
+import type { Questions, SystemOneResult } from "@typesafe-ai/sdk";
 import type { Config } from "./config.js";
-import type { AskJev } from "./decide.js";
+import type { AskJev, JevRequest } from "./decide.js";
+import { IMAGES_HEADER } from "./images.js";
 import table from "./providers.json" with { type: "json" };
 
 /** One row of the provider table: where Jev runs, which key gets there, and what to call it. */
@@ -42,7 +43,7 @@ export function resolveProvider(env: Env): ProviderId {
 
 /**
  * Model ids live in different namespaces: TypeSafe's have no slash (`jev-latest`), the gateways'
- * do (`typesafe/jev-1.13`). A JEV_MODEL written for one provider is ignored under another, so
+ * do (`typesafe/jev-1.14`). A JEV_MODEL written for one provider is ignored under another, so
  * switching provider never sends an id the new one cannot know. OpenCode's ids have no slash
  * either, so OpenCode accepts only its listed ids, and a setting written for TypeSafe never
  * selects its paid model. The others take any id of their shape, so a new model needs no release.
@@ -91,7 +92,7 @@ export function createAskJev(
   if (!config.jevApiKey) {
     throw new Error(`No API key for Jev: set ${provider.keyEnv} (${provider.label}), or run jev-codex --setup.`);
   }
-  const once = async (request: SystemOneRequest<Questions>) => {
+  const once = async (request: JevRequest) => {
     const response = await fetchImpl(config.jevUrl, {
       method: "POST",
       headers: {
@@ -100,6 +101,7 @@ export function createAskJev(
         // OpenRouter attributes traffic by these; the others ignore them.
         "http-referer": "https://github.com/vinilana/jev-gateway",
         "x-title": "jev-gateway",
+        ...(request.assets ? { [IMAGES_HEADER]: "true" } : {}),
       },
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(config.jevTimeoutMs),

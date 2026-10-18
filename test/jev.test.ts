@@ -28,7 +28,7 @@ describe("choosing a provider", () => {
   it("never sends one provider's model id to another", () => {
     expect(resolveModel("typesafe", undefined)).toBe("jev-latest");
     expect(resolveModel("typesafe", "jev-1.13.0")).toBe("jev-1.13.0");
-    expect(resolveModel("openrouter", "jev-latest")).toBe("typesafe/jev-1.13");
+    expect(resolveModel("openrouter", "jev-latest")).toBe("typesafe/jev-1.14");
     expect(resolveModel("openrouter", "typesafe/jev-1.13-20260917")).toBe("typesafe/jev-1.13-20260917");
     expect(resolveModel("typesafe", "typesafe-ai/jev")).toBe("jev-latest");
     expect(resolveModel("opencode", undefined)).toBe("jev-1.13-free");
@@ -97,6 +97,17 @@ describe("asking Jev", () => {
     const refused = capture(() => new Response("bad key", { status: 401 }));
     await expect(createAskJev(loadConfig({ TYPESAFE_API_KEY: "k" }), refused.fetchImpl)(request)).rejects.toThrow(/401 from TypeSafe/);
     expect(refused.calls).toHaveLength(1);
+  });
+
+  it("opts a request into images only when it carries some", async () => {
+    const { calls, fetchImpl } = capture(() => Response.json(answer));
+    const ask = createAskJev(loadConfig({ TYPESAFE_API_KEY: "k" }), fetchImpl);
+    const assets = { "<image-1>": { type: "image" as const, data_base64: "iVBORw0KGgo=", format: "png" as const } };
+    await ask({ ...request, state: "Look at <image-1>", assets });
+    await ask(request);
+    expect(calls[0]!.headers.get("typesafe-danger-zone-images")).toBe("true");
+    expect(calls[0]!.body.assets).toEqual(assets);
+    expect(calls[1]!.headers.has("typesafe-danger-zone-images")).toBe(false);
   });
 
   it("says which variable to set when there is no key", () => {

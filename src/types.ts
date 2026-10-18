@@ -1,3 +1,5 @@
+import type { Images } from "./images.js";
+
 /** The subset of the OpenAI Chat Completions shapes the router needs to understand. */
 
 export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -97,6 +99,8 @@ export interface RouterInput {
    * thinking block, and the provider rejects a thinking conversation that replays it.
    */
   thinking?: boolean;
+  /** Inline images the turns refer to; the newest that fit Jev's limits are sent along. */
+  images?: Images;
 }
 
 /** A tool call Jev produced in full, to be rendered in the client's wire format. */

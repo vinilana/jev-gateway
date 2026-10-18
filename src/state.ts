@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import type { Images } from "./images.js";
 import type { Json, RouterInput, Turn } from "./types.js";
 
 export type Limits = Pick<Config, "maxStateChars" | "maxMessageChars">;
@@ -20,14 +21,17 @@ function prefix(text: string, max: number): string {
   return /[\uD800-\uDBFF]$/u.test(result) ? result.slice(0, -1) : result;
 }
 
-/** Jev is text-only: flatten content parts and leave a placeholder for anything else. */
-export function textOf(content: unknown): string {
+/**
+ * Flatten content parts to text. An inline image becomes a reference to it when `images` collects
+ * them; anything else Jev cannot read becomes a placeholder naming its type.
+ */
+export function textOf(content: unknown, images?: Images): string {
   if (content == null) return "";
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return JSON.stringify(content);
   return content
     .map((part: { type?: string; text?: unknown }) =>
-      typeof part?.text === "string" ? part.text : `[${part?.type ?? "attachment"}]`,
+      typeof part?.text === "string" ? part.text : (images?.ref(part) ?? `[${part?.type ?? "attachment"}]`),
     )
     .join("\n");
 }

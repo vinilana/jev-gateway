@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Decision } from "../decide.js";
+import { collectImages } from "../images.js";
 import { textOf } from "../state.js";
 import type { DirectCall, JsonSchema, RouterInput, RouterTool, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
@@ -106,13 +107,14 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
   // Delegated tasks and replies use a separate message format whose content may be encrypted.
   if (items.some((item) => item.type === "agent_message")) return { skip: "agent_message" };
 
+  const images = collectImages();
   const toolNameByCallId = new Map<string, string>();
   const system = typeof req.instructions === "string" && req.instructions ? [req.instructions] : [];
   const turns: Turn[] = [];
   for (const item of items) {
     const type = item.type ?? (item.role ? "message" : undefined);
     if (type === "message") {
-      const text = textOf(item.content);
+      const text = textOf(item.content, images);
       if (item.role === "system" || item.role === "developer") {
         if (text) system.push(text);
       } else {
@@ -136,7 +138,7 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
         role: "tool_result",
         ...(typeof item.call_id === "string" ? { call_id: item.call_id } : {}),
         tool: toolNameByCallId.get(item.call_id ?? "") ?? "unknown",
-        content: textOf(item.output),
+        content: textOf(item.output, images),
       });
     }
     // Reasoning items (encrypted), item references and hosted-tool traces carry nothing Jev can read.
@@ -148,6 +150,7 @@ function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | 
     turns,
     tools: toTools(declaredTools(req)),
     toolChoice: choice === "auto" || choice === "required" ? choice : "decided",
+    images,
   };
 }
 

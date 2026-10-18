@@ -196,9 +196,14 @@ and return the same answers, so the choice is about whose account and billing yo
 | Provider | Key variable | Default model | Get a key |
 | --- | --- | --- | --- |
 | TypeSafe (official) | `TYPESAFE_API_KEY` | `jev-latest` | [typesafe.ai](https://typesafe.ai) |
-| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
+| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.14` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` | [Vercel dashboard](https://vercel.com/dashboard/ai-gateway/api-keys) |
 | OpenCode | `OPENCODE_API_KEY` | `jev-1.13-free` | [OpenCode Zen](https://opencode.ai/auth) |
+
+TypeSafe's `jev-latest` still answers as Jev 1.13 (checked 2026-10-18). TypeSafe has said it will
+move the alias to Jev 1.14 about a week after the 2026-10-14 release; until then
+`JEV_MODEL=jev-1.14.0` picks 1.14. OpenCode lists only Jev 1.13 so far, and Vercel names no
+version in its id.
 
 OpenCode serves two ids at the same endpoint: `jev-1.13-free` (free,
 [for a limited time](https://opencode.ai/docs/zen/#jev)) and the paid `jev-1.13`. The gateway
@@ -619,6 +624,38 @@ The budget covers the complete JSON serialization, including escaping, envelope,
 measured in JavaScript UTF-16 code units. Text clipping never splits a surrogate pair. Only Jev's
 request is shortened; the provider request and the caller's input remain intact.
 
+### Images
+
+Jev reads images, so a screenshot the user pastes, or one a tool returns, counts in the decision
+instead of reaching Jev as the word `[image]`. The newest `JEV_MAX_IMAGES` (default 2) go with the
+question. The others stay placeholders. The client's request is not changed.
+
+Only images the conversation carries inline, as base64 in the request body, and that Jev accepts as
+they are go to Jev:
+
+| Image | What Jev gets |
+| --- | --- |
+| PNG or JPEG, 280 to 1568 pixels on each side, up to 16 MiB | The image |
+| Larger or smaller, animated PNG, WebP, GIF, or anything else | The placeholder. The gateway does not resize or convert images |
+| Given by URL | The placeholder. The gateway does not fetch it |
+
+An image costs Jev tokens: about 1,100 for 640×480 and 6,600 for 1568×1568, measured against
+`jev-1.14.0` on 2026-10-18. The gateway keeps fewer turns of the conversation to leave the images
+that room. When even the newest turn would not fit beside them, Jev is asked without images.
+
+TypeSafe calls images experimental and does not yet consider them ready for production: the format,
+the limits and the accuracy may change between releases. The gateway opts in per call with the
+`TypeSafe-Danger-Zone-Images: true` header, sent only when the call carries an image. If the
+provider refuses it (400, 413, 415 or 422), the gateway asks again without the images and routes on
+text, so a provider that does not take images costs one extra Jev call on each request that has one.
+`imagesRefused` in the log line says why. Set `JEV_MAX_IMAGES=0` to skip images entirely.
+
+On 2026-10-18, TypeSafe's API took images through this code with `jev-latest` (Jev 1.13) and
+`jev-1.14.0`. Jev named the color of synthetic test images correctly, and the API refused a
+1600-pixel image and a request without the header, as the table above expects. Whether OpenRouter,
+Vercel and OpenCode pass images on to Jev has not been checked. The dashboard shows how many images
+Jev saw when you hover over the Jev latency.
+
 ## Configuration
 
 Settings are environment variables. The launchers read them from your shell,
@@ -638,6 +675,7 @@ list. The ones worth knowing:
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
 | `JEV_MAX_STATE_CHARS` | `60000` | Serialized routing-state budget; integer at least 64 |
 | `JEV_MAX_MESSAGE_CHARS` | `4000` | Per-text-field routing limit; positive integer |
+| `JEV_MAX_IMAGES` | `2` | Most images Jev sees in one call, newest first. `0` keeps every image a placeholder. See [Images](#images) |
 | `ARGS_MODEL` | unset | A cheaper model for filling arguments in `forced` mode |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |
@@ -687,8 +725,9 @@ contain request bodies as documented above.
   a tool anyway, it may produce an incomplete reply and the agent will retry. Raise
   `JEV_MIN_CONFIDENCE` if you see this.
 - In `hint` mode the LLM still does its own reasoning, so the gain is accuracy, not cost.
-- Jev reads text only and has a 32k-token window. Images become placeholders and long conversations
-  keep their newest turns. It is most accurate in English.
+- Jev has a 32k-token window. Long conversations keep their newest turns, and images take room
+  from them. Images Jev cannot take stay placeholders (see [Images](#images)). Jev is most accurate
+  in English.
 - The default confidence thresholds are starting points. Use the dashboard and baseline mode to tune
   them for your own work.
 - A gateway started by a launcher has no key of its own, because the one `Authorization` header a

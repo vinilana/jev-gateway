@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Decision } from "../decide.js";
+import { collectImages } from "../images.js";
 import { textOf } from "../state.js";
 import type { ChatRequest, DirectCall, RouterInput, RouterTool, ToolDef, Turn } from "../types.js";
 import { sse, type Adapter } from "./adapter.js";
@@ -43,10 +44,11 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
     for (const call of message.tool_calls ?? []) toolNameByCallId.set(call.id, call.function.name);
   }
 
+  const images = collectImages();
   const system: string[] = [];
   const turns: Turn[] = [];
   for (const message of req.messages) {
-    const text = textOf(message.content);
+    const text = textOf(message.content, images);
     if (message.role === "system" || message.role === "developer") {
       if (text) system.push(text);
     } else if (message.role === "tool") {
@@ -77,6 +79,7 @@ function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { ski
     turns,
     tools: toTools(rawTools),
     toolChoice: choice === "auto" || choice === "required" ? choice : "decided",
+    images,
   };
 }
 

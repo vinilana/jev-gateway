@@ -1,5 +1,6 @@
 import type { Questions, SystemOneRequest, SystemOneResult } from "@typesafe-ai/sdk";
 import type { Config } from "./config.js";
+import { attachImages, type JevAsset } from "./images.js";
 import {
   argKey,
   buildQuestions,
@@ -17,8 +18,11 @@ import {
 import { buildState } from "./state.js";
 import type { Json, RouterInput, RouterTool } from "./types.js";
 
+/** What the gateway asks Jev: the SDK's request, plus the images it refers to. */
+export type JevRequest = SystemOneRequest<Questions> & { assets?: Record<string, JevAsset> };
+
 /** The one Jev call the router makes; injectable so tests need no network. */
-export type AskJev = (request: SystemOneRequest<Questions>) => Promise<SystemOneResult<Questions>>;
+export type AskJev = (request: JevRequest) => Promise<SystemOneResult<Questions>>;
 
 export interface JevTrace {
   choice: string;
@@ -29,6 +33,10 @@ export interface JevTrace {
   latencyMs: number;
   /** Tools that survived the first pass, when the roster needed one. */
   shortlist?: string[];
+  /** How many images Jev saw. */
+  images?: number;
+  /** Why Jev's provider refused the images, when it did and the question was asked again without them. */
+  imagesRefused?: string;
 }
 
 export type Decision = { jev?: JevTrace } & (
@@ -44,6 +52,9 @@ export type Decision = { jev?: JevTrace } & (
 );
 
 type Answers = SystemOneResult<Questions>["answers"];
+
+/** Statuses a provider answers a request it cannot take with: too big, or a shape it does not know. */
+const IMAGES_REFUSED = new Set([400, 413, 415, 422]);
 
 /**
  * A tool's name is whatever the client sent, and the client got it from wherever its tools come
@@ -100,15 +111,12 @@ function resolveArgs(
   return certainty >= minCertainty ? { args, certainty } : undefined;
 }
 
+type Ask = (questions: Questions) => Promise<SystemOneResult<Questions>>;
+
 /** The strongest few tools of every shard, ranked in a single Jev call. */
-async function shortlist(
-  tools: RouterTool[],
-  state: SystemOneRequest<Questions>["state"],
-  config: Config,
-  askJev: AskJev,
-): Promise<{ tools: RouterTool[]; inputTokens: number }> {
+async function shortlist(tools: RouterTool[], ask: Ask): Promise<{ tools: RouterTool[]; inputTokens: number }> {
   const { questions, shards } = buildShortlistQuestions(tools);
-  const result = await askJev({ state, questions, model: config.jevModel });
+  const result = await ask(questions);
   const kept = shards.flatMap((shard, index) => {
     const answer = result.answers[shardKey(index)];
     if (answer?.type !== "choice") return [];
@@ -127,15 +135,39 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
   if (skip) return { mode: "passthrough", reason: skip };
 
   const startedAt = performance.now();
-  const state = buildState(input, config);
-  if (state.unrepresentable) return { mode: "passthrough", reason: "incomplete_routing_context" };
+  const full = buildState(input, config);
+  if (full.unrepresentable) return { mode: "passthrough", reason: "incomplete_routing_context" };
+  let attached = attachImages(full, input.images, config.maxImages);
+  if (attached.tokens) {
+    // Images share Jev's window with the state, whose budget counts characters, about four to a
+    // token: give them room by keeping fewer turns, then see which images those turns still hold.
+    // When the newest turns no longer fit beside them, routing on text beats not routing.
+    const room = buildState(input, { ...config, maxStateChars: Math.max(0, config.maxStateChars - attached.tokens * 4) });
+    attached = room.unrepresentable ? attachImages(full, input.images, 0) : attachImages(room, input.images, config.maxImages);
+  }
+  const { state, textOnly } = attached;
+  let images = attached.assets;
+  let imagesRefused: string | undefined;
+  // Images are an experiment on Jev's side, and not every provider in front of it takes them. A
+  // call they get refused in is asked again without them: routing on text beats not routing.
+  const ask: Ask = async (questions) => {
+    if (!images) return askJev({ state: textOnly, questions, model: config.jevModel });
+    try {
+      return await askJev({ state, questions, model: config.jevModel, assets: images });
+    } catch (error) {
+      if (!IMAGES_REFUSED.has((error as { status?: number }).status ?? 0)) throw error;
+      images = undefined;
+      imagesRefused = (error instanceof Error ? error.message : String(error)).slice(0, 200);
+      return askJev({ state: textOnly, questions, model: config.jevModel });
+    }
+  };
   let tools = input.tools;
   let shortlistTokens = 0;
   let result: SystemOneResult<Questions>;
   let plans: ToolPlan[];
   try {
     if (tools.length > MAX_TOOLS) {
-      ({ tools, inputTokens: shortlistTokens } = await shortlist(tools, state, config, askJev));
+      ({ tools, inputTokens: shortlistTokens } = await shortlist(tools, ask));
       if (tools.length === 0) return { mode: "passthrough", reason: "jev_unexpected_answer" };
     }
     const built = buildQuestions(tools, {
@@ -143,7 +175,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
       withArgs: config.directCalls,
     });
     plans = built.plans;
-    result = await askJev({ state, questions: built.questions, model: config.jevModel });
+    result = await ask(built.questions);
   } catch (error) {
     // Fail open: a Jev outage must never take the gateway down with it.
     return { mode: "passthrough", reason: `jev_error: ${error instanceof Error ? error.message : String(error)}` };
@@ -166,6 +198,8 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
     inputTokens: result.usage.input_tokens + shortlistTokens,
     latencyMs: Math.round(performance.now() - startedAt),
     ...(tools === input.tools ? {} : { shortlist: tools.map((tool) => tool.name) }),
+    ...(images ? { images: Object.keys(images).length } : {}),
+    ...(imagesRefused ? { imagesRefused } : {}),
   };
 
   if (picked.confidence < config.minConfidence) return { mode: "passthrough", reason: "low_confidence", jev };
