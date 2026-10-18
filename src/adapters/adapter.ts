@@ -15,7 +15,7 @@ export interface Adapter<Req extends { model?: string; stream?: boolean }> {
   /** Re-serialize a rewritten request; absent means JSON.stringify. */
   encode?(req: Req): string | Uint8Array;
   /** What Jev should judge, or why this request isn't routable. */
-  toInput(req: Req, maxMessageChars: number): RouterInput | { skip: string };
+  toInput(req: Req): RouterInput | { skip: string };
   /** Rewrite the request so the LLM only does the part of the work Jev left for it. */
   apply(req: Req, decision: Decision, argsModel?: string): Req;
   directJson(req: Req, call: DirectCall): object;

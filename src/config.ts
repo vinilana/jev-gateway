@@ -102,8 +102,10 @@ export function loadConfig(env: Env = process.env): Config {
   if (config.routerApiKey && !config.upstreamApiKey) {
     throw new Error("ROUTER_API_KEY requires UPSTREAM_API_KEY (the client key is not valid upstream)");
   }
+  // A smaller state budget leaves room for little more than the JSON around the newest turn, so Jev
+  // would be asked about a conversation whose text has been cut to nothing.
   for (const [key, value, minimum] of [
-    ["JEV_MAX_STATE_CHARS", config.maxStateChars, 64],
+    ["JEV_MAX_STATE_CHARS", config.maxStateChars, 1_000],
     ["JEV_MAX_MESSAGE_CHARS", config.maxMessageChars, 1],
   ] as const) {
     if (!Number.isSafeInteger(value) || value < minimum) {

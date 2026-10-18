@@ -155,13 +155,69 @@ describe("routing context", () => {
     const input = geminiAdapter.toInput({ contents: [
       { role: "model", parts: [{ functionCall: { id: "g1", name: "read", args: {} } }] },
       { role: "user", parts: [{ functionResponse: { id: "g1", name: "read", response: { ok: true } } }] },
-    ], tools: [{ functionDeclarations: [{ name: "read" }] }] }, 4000) as RouterInput;
+    ], tools: [{ functionDeclarations: [{ name: "read" }] }] }) as RouterInput;
     expect(input.turns[0]!.tool_calls).toEqual([{ tool: "read", call_id: "g1", arguments: "{}" }]);
     expect(input.turns[1]!.call_id).toBe("g1");
     expect(buildState(input, { maxStateChars: 500, maxMessageChars: 4000 }).unrepresentable).toBeUndefined();
   });
 
-  it.each(["0", "63", "1.5", "-1"])("rejects invalid state budgets at startup: %s", (value) => {
-    expect(() => loadConfig({ JEV_MAX_STATE_CHARS: value })).toThrow(`JEV_MAX_STATE_CHARS must be an integer of at least 64, got "${value}"`);
+  it.each(["0", "64", "999", "1000.5", "-1"])("rejects invalid state budgets at startup: %s", (value) => {
+    expect(() => loadConfig({ JEV_MAX_STATE_CHARS: value })).toThrow(`JEV_MAX_STATE_CHARS must be an integer of at least 1000, got "${value}"`);
+  });
+
+  it("accepts the smallest state budget, which still sends Jev some of the newest turn", () => {
+    const config = loadConfig({ JEV_MAX_STATE_CHARS: "1000" });
+    expect(config.maxStateChars).toBe(1000);
+    const state = buildState({ system: "You are a coding agent. ".repeat(500), turns: [{ role: "user", text: "fix the failing test ".repeat(200) }] }, config);
+    expect(JSON.stringify(state).length).toBeLessThanOrEqual(1000);
+    expect(((state.conversation as Turn[])[0]!.text as string).length).toBeGreaterThan(100);
+  });
+
+  it("passes the request through untouched when the newest turns cannot fit even with their text cut", async () => {
+    const jev = fakeJev({ tool: { choice: "read" }, needs_tool: { noul: 0.99 } });
+    const upstream = fakeUpstream();
+    const app = createApp({ config: testConfig({ maxStateChars: 1000 }), askJev: jev.askJev, fetch: upstream.fetchImpl });
+    const ids = Array.from({ length: 40 }, (_, index) => `call_${index}`);
+    const body = { model: "m", messages: [
+      { role: "user", content: "read every file" },
+      { role: "assistant", tool_calls: ids.map((id) => ({ id, type: "function", function: { name: "read", arguments: "{}" } })) },
+      ...ids.map((id) => ({ role: "tool", tool_call_id: id, content: "contents" })),
+    ], tools: [{ type: "function", function: { name: "read", parameters: { type: "object", properties: { path: { type: "string" } } } } }] };
+    const response = await app.request("/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect(response.headers.get("x-jev-gateway-mode")).toBe("passthrough");
+    expect(response.headers.get("x-jev-gateway-reason")).toBe("incomplete_routing_context");
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls[0]!.body).toEqual(body);
+  });
+
+  const geminiTool = { functionDeclarations: [{ name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } }] };
+  it.each([
+    ["two id-less calls answered by two id-less responses", undefined, [undefined, undefined]],
+    ["an id-less call answered with an id the client made up", undefined, ["read_file-1760000000-1", "read_file-1760000000-2"]],
+    ["ids reused from an earlier exchange", "call_0", ["call_0", "call_0"]],
+    ["empty-string ids", "", ["", ""]],
+  ])("routes a Gemini conversation with %s", async (_name, callId, responseIds) => {
+    const jev = fakeJev({ tool: { choice: "read_file" }, needs_tool: { noul: 0.95 } });
+    const upstream = fakeUpstream();
+    const app = createApp({ config: testConfig(), askJev: jev.askJev, fetch: upstream.fetchImpl });
+    const id = (value: string | undefined) => (value === undefined ? {} : { id: value });
+    const exchange = (paths: string[]) => [
+      { role: "model", parts: paths.map((path) => ({ functionCall: { ...id(callId), name: "read_file", args: { path } } })) },
+      { role: "user", parts: paths.map((path, index) => ({
+        functionResponse: { ...id(responseIds[index]), name: "read_file", response: { output: `contents of ${path}` } },
+      })) },
+    ];
+    const contents = [{ role: "user", parts: [{ text: "compare these files" }] }, ...exchange(["a.ts", "b.ts"]), ...exchange(["c.ts", "d.ts"])];
+    const response = await app.request("/v1beta/models/gemini-2.0-flash:generateContent", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents, tools: [geminiTool] }),
+    });
+    expect(response.headers.get("x-jev-gateway-mode")).toBe("forced");
+    expect(jev.requests).toHaveLength(1);
+    const { conversation } = jev.requests[0]!.state as { conversation: Turn[] };
+    expect(conversation.filter((turn) => turn.role === "tool_result").map((turn) => turn.content)).toEqual(
+      ["a.ts", "b.ts", "c.ts", "d.ts"].map((path) => JSON.stringify({ output: `contents of ${path}` })),
+    );
   });
 });

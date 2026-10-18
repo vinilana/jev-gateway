@@ -22,7 +22,7 @@ const field3Texts = (req: ReturnType<typeof parse>) =>
 describe("exaAdapter.toInput", () => {
   it("extracts tools and the conversation for Jev", () => {
     const req = parse(request(userMsg("run echo hi"), toolDef("exec", '{"type":"object"}')));
-    const input = exaAdapter.toInput(req, 4000);
+    const input = exaAdapter.toInput(req);
     if ("skip" in input) throw new Error(input.skip);
     expect(input.tools).toEqual([
       { kind: "function", name: "exec", description: "does exec", parameters: { type: "object" } },
@@ -33,7 +33,7 @@ describe("exaAdapter.toInput", () => {
   });
 
   it("produces no tools for requests without field 10, so decide passes them through", () => {
-    const input = exaAdapter.toInput(parse(request(userMsg("hi"))), 4000);
+    const input = exaAdapter.toInput(parse(request(userMsg("hi"))));
     if ("skip" in input) throw new Error(input.skip);
     expect(input.tools).toEqual([]); // decide() turns this into passthrough "no_tools"
   });
@@ -50,7 +50,7 @@ describe("exaAdapter.toInput", () => {
       ),
     );
     const toolResult = field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 4n), utf8(3, "file1 file2"), utf8(7, "call_abc#def")));
-    const input = exaAdapter.toInput(parse(request(userMsg("list files"), assistant, toolResult, toolDef("exec"))), 4000);
+    const input = exaAdapter.toInput(parse(request(userMsg("list files"), assistant, toolResult, toolDef("exec"))));
     if ("skip" in input) throw new Error(input.skip);
     expect(input.turns[1]).toEqual({
       role: "assistant",
@@ -67,7 +67,7 @@ describe("exaAdapter.toInput", () => {
     const result = (id: string, content: string) => field(3, 2, concat(field(2, 0, 4n), utf8(3, content), utf8(7, id)));
     const bytes = request(call("a"), result("a", "A"), call("b"), result("a", "duplicate ".repeat(100)), result("b", "B"), toolDef("exec"));
     const req = parse(bytes);
-    const input = exaAdapter.toInput(req, 4000);
+    const input = exaAdapter.toInput(req);
     if ("skip" in input) throw new Error(input.skip);
     const smallest = { earlier_turns_omitted: 2, clipped: true, conversation: [
       { role: "assistant", tool_calls: [{ tool: "exec", call_id: "b", arguments: "" }] },
@@ -89,7 +89,7 @@ describe("exaAdapter.toInput", () => {
 
   it("leaves thinking intact until state construction records clipping", () => {
     const assistant = field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 2n), utf8(11, "t".repeat(100))));
-    const input = exaAdapter.toInput(parse(request(assistant, toolDef("exec"))), 30);
+    const input = exaAdapter.toInput(parse(request(assistant, toolDef("exec"))));
     if ("skip" in input) throw new Error(input.skip);
     expect(input.turns[0]!.role).toBe("assistant");
     expect(input.turns[0]!.text).toBe("t".repeat(100));
@@ -107,7 +107,7 @@ describe("exaAdapter.toInput", () => {
     const result = field(3, 2, concat(field(2, 0, 4n), utf8(3, long), utf8(7, "call-long")));
     const bytes = request(userMsg(long), assistant, result, toolDef("exec"));
     const req = parse(bytes);
-    const input = exaAdapter.toInput(req, 30);
+    const input = exaAdapter.toInput(req);
     if ("skip" in input) throw new Error(input.skip);
     expect(input.turns[0]!.text).toBe(long);
     expect(input.turns[1]!.tool_calls).toEqual([{ tool: "exec", call_id: "call-long", arguments: long }]);
@@ -120,7 +120,7 @@ describe("exaAdapter.toInput", () => {
 
   it("skips messages with roles it does not know", () => {
     const unknown = field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 99n), utf8(3, "hidden")));
-    const input = exaAdapter.toInput(parse(request(userMsg("hi"), unknown, toolDef("exec"))), 4000);
+    const input = exaAdapter.toInput(parse(request(userMsg("hi"), unknown, toolDef("exec"))));
     if ("skip" in input) throw new Error(input.skip);
     expect(input.turns).toEqual([{ role: "user", text: "hi" }]);
   });

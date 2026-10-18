@@ -30,7 +30,7 @@ function toTools(rawTools: ToolDef[]): RouterTool[] {
   return tools;
 }
 
-function toInput(req: ChatRequest, maxMessageChars: number): RouterInput | { skip: string } {
+function toInput(req: ChatRequest): RouterInput | { skip: string } {
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
   const rawTools = Array.isArray(req.tools) ? req.tools : [];
   // A function with no name is a body upstream will refuse; it is not ours to guess at.

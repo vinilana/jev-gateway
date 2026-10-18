@@ -30,7 +30,7 @@ function setup(canned: Parameters<typeof fakeJev>[0], config = testConfig()) {
 
 describe("planTool", () => {
   it("marks a tool closed-set only when every parameter is an enum, boolean or const", () => {
-    const [weather, lights] = (chatAdapter.toInput(chat("hi"), 100) as RouterInput).tools as [RouterTool, RouterTool];
+    const [weather, lights] = (chatAdapter.toInput(chat("hi")) as RouterInput).tools as [RouterTool, RouterTool];
     expect(planTool(weather).closedParams).toBeUndefined();
     expect(planTool(lights).closedParams?.map((param) => param.kind)).toEqual(["enum", "boolean", "enum"]);
   });
@@ -51,7 +51,6 @@ describe("chatAdapter.toInput + buildState", () => {
           { role: "tool", tool_call_id: "c1", content: "sunny" },
         ],
       },
-      100,
     ) as RouterInput;
     const state = buildState(input, { maxStateChars: 300, maxMessageChars: 100 });
     expect(JSON.stringify(state).length).toBeLessThanOrEqual(300);

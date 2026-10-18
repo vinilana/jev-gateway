@@ -47,7 +47,7 @@ function toTools(raw: MessagesTool[]): RouterTool[] {
     );
 }
 
-function toInput(req: MessagesRequest, maxMessageChars: number): RouterInput | { skip: string } {
+function toInput(req: MessagesRequest): RouterInput | { skip: string } {
   if (!Array.isArray(req.messages)) return { skip: "no_messages" };
 
   const toolNameById = new Map<string, string>();

@@ -579,7 +579,7 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | `forced` | Jev is confident about the tool, but some arguments are open-ended | Forwarded with `tool_choice` set to that tool, so the LLM only fills in arguments. `ARGS_MODEL` can send these to a cheaper model |
 | `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
 | `none` | Jev is confident that no tool is needed and `JEV_ON_NONE=force_none`, the default for every client except Codex. With `passthrough` this mode never occurs | Forwarded with the provider's no-tool setting. With `JEV_ON_NONE=passthrough`, or when the request can only be hinted, the mode is `passthrough` with reason `no_tool_needed` |
-| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, the caller already chose, Jev says no tool is needed (`no_tool_needed`), or shadow evaluation is on (`shadow`) | Forwarded byte for byte. `x-jev-gateway-reason` says why. Under [shadow evaluation](#evaluate-jev-without-applying-it) the log line also holds Jev's proposal |
+| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, the caller already chose, Jev says no tool is needed (`no_tool_needed`), shadow evaluation is on (`shadow`), or the newest turns do not fit `JEV_MAX_STATE_CHARS` even shortened (`incomplete_routing_context`) | Forwarded byte for byte. `x-jev-gateway-reason` says why. Under [shadow evaluation](#evaluate-jev-without-applying-it) the log line also holds Jev's proposal |
 
 Responses requests containing Codex `agent_message` items pass through without consulting Jev,
 with reason `agent_message`. These carry delegated tasks or replies that the router cannot
@@ -607,17 +607,16 @@ changing it.
 Tool lists longer than 120 entries (Claude Code sends about 280) take two Jev calls. The first ranks
 the list in groups. The second decides among the top 3 of each group, using full descriptions.
 
-Routing state retains a contiguous suffix of complete call/result groups. Calls and results are
-associated by outstanding observed IDs; Gemini IDs are retained when supplied. Missing, generated
-or reused IDs fall back to pending calls with the same name in FIFO order. Overlapping parallel-call
-spans stay in their original chronological order, and unmatched results retain standalone groups.
+Jev is sent the newest part of the conversation that fits `JEV_MAX_STATE_CHARS`, measured on the
+JSON it receives, and is told how many earlier turns were left out. A tool call and its result are
+kept or left out together, parallel calls included. Any text longer than `JEV_MAX_MESSAGE_CHARS`
+(a message, a tool's output, a tool's arguments) keeps its start and end, and Jev is told that
+something was shortened. Long tool output does not stop a request from being routed.
 
-Clipping is recorded as `clipped: true` in Jev's state, not inferred from conversation text.
-Ordinary clipped output still routes. The newest group can be shortened to fit while retaining
-its identities; if even its structure and metadata cannot fit, the request bypasses unchanged.
-The budget covers the complete JSON serialization, including escaping, envelope, and metadata,
-measured in JavaScript UTF-16 code units. Text clipping never splits a surrogate pair. Only Jev's
-request is shortened; the provider request and the caller's input remain intact.
+When the newest turns alone are over the budget, their text is shortened further until they fit.
+If they still do not fit with no text left, which takes many parallel calls or a small budget, Jev
+is not asked and the request passes through with reason `incomplete_routing_context`. These limits
+only shorten what Jev is sent: the request forwarded to your LLM is never cut.
 
 ## Configuration
 
@@ -636,8 +635,8 @@ list. The ones worth knowing:
 | `JEV_ROUTING` | `on` | Set to `off` to start in baseline mode |
 | `JEV_SHADOW` | `false` | Ask Jev beside each request and log its proposal without applying it; needs a restart. See [Evaluate Jev without applying it](#evaluate-jev-without-applying-it) |
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
-| `JEV_MAX_STATE_CHARS` | `60000` | Serialized routing-state budget; integer at least 64 |
-| `JEV_MAX_MESSAGE_CHARS` | `4000` | Per-text-field routing limit; positive integer |
+| `JEV_MAX_STATE_CHARS` | `60000` | How much of the conversation Jev is sent, in characters of its JSON. A whole number of at least 1000 |
+| `JEV_MAX_MESSAGE_CHARS` | `4000` | Longer texts are shortened in what Jev is sent, keeping their start and end. A whole number of at least 1 |
 | `ARGS_MODEL` | unset | A cheaper model for filling arguments in `forced` mode |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |
