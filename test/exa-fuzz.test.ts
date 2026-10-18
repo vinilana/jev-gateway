@@ -67,7 +67,7 @@ describe("exa wire stability", () => {
 
       const req = exaAdapter.parse!(body); // undefined → passthrough, the client's problem
       if (!req) continue;
-      const input = exaAdapter.toInput(req, 4000);
+      const input = exaAdapter.toInput(req);
       expect(input === null || typeof input === "object").toBe(true);
       const hinted = exaAdapter.apply(req, { mode: "hint", tool: "exec", confidence: 0.9 });
       expect(() => peel(exaAdapter.encode!(hinted) as Uint8Array)).not.toThrow();

@@ -99,7 +99,7 @@ function toTools(raw: ResponsesTool[]): RouterTool[] {
   return [...tools.values()];
 }
 
-function toInput(req: ResponsesRequest, maxMessageChars: number): RouterInput | { skip: string } {
+function toInput(req: ResponsesRequest): RouterInput | { skip: string } {
   // With server-side history the router would be judging a conversation it cannot see.
   if (req.previous_response_id) return { skip: "previous_response_id" };
   const items = inputItems(req);

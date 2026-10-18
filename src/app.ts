@@ -170,7 +170,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   const decideFor = async <Req extends AnyRequest>(adapter: Adapter<Req>, req: Req): Promise<{ decision: Decision; tools?: number }> => {
     let input: ReturnType<Adapter<Req>["toInput"]>;
     try {
-      input = adapter.toInput(req, config.maxMessageChars);
+      input = adapter.toInput(req);
     } catch {
       return { decision: { mode: "passthrough", reason: "unreadable_request" } };
     }

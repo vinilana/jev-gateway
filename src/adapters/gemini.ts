@@ -63,7 +63,7 @@ const allowedFunctions = (config: { allowedFunctionNames?: string[] } | undefine
   config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
 
 /** Google Gemini API (`POST /v1beta/models/...:generateContent` and `:streamGenerateContent`). */
-function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
+function toInput(req: GeminiRequest): RouterInput | { skip: string } {
   if (!Array.isArray(req.contents)) return { skip: "no_messages" };
   const config = req.toolConfig?.functionCallingConfig;
   const { declarations: rawDecls, hosted } = visibleTools(req.tools ?? [], allowedFunctions(config));
