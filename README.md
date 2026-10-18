@@ -161,12 +161,12 @@ proposal joins the log line when both the reply and Jev's answer are in. Nothing
 applied: no forced tool, no direct answer, no hint, no `ARGS_MODEL`.
 
 - **The request does not wait for Jev.** Jev runs beside the request instead of in front of it. The
-  gateway still reads the conversation and builds Jev's question before the request leaves, which
-  is local work; waiting for Jev's answer is not. A slow or failing Jev never touches the reply, and
-  `durationMs` measures the reply, not Jev. The reply's `x-jev-gateway-reason` header reads `shadow`,
-  with no tool, confidence or latency headers, because none of that exists yet when the reply
-  starts. It reads `shadow` even for a request Jev then turns out not to have been asked about; the
-  log line has the real reason.
+  gateway starts forwarding the request first and only then reads the conversation and builds
+  Jev's question, so not even that local work holds it up. A slow or failing Jev never touches the
+  reply, and `durationMs` measures the reply, not Jev. The reply's `x-jev-gateway-reason` header
+  reads `shadow`, with no tool, confidence or latency headers, because none of that exists yet when
+  the reply starts. It reads `shadow` even for a request Jev then turns out not to have been asked
+  about; the log line has the real reason.
 - **Jev still costs tokens.** Each request is still one Jev call (two for long tool lists).
 - **The proposal is in `shadow`:** its `mode`, plus `reason`, `tool`, `kind` and `confidence` where
   they apply. A `direct` proposal does not copy the arguments. The line itself reads `passthrough`
@@ -652,7 +652,9 @@ a SHA-256 fingerprint of the gateway's runtime files, calculated once at startup
 those files change, even if the package version stays the same, and stays fixed for that running
 process. It covers `dist` in a compiled install or `src` in development, including adapters,
 provider definitions and dashboard HTML. It excludes environment files, source maps and external
-dependencies. A restart with identical files keeps the same build ID and gets a new run ID.
+dependencies. A restart with identical files keeps the same build ID and gets a new run ID. If
+those files cannot be read at startup, the gateway starts anyway and its entries have no
+`gatewayBuildId`.
 
 Standard log entries contain metadata only, including for `direct` calls: tool arguments stay in
 the client reply. A `direct` entry has no `sentModel` or LLM usage, because it never calls the LLM.
@@ -722,6 +724,11 @@ made Opus 5 and Sonnet 5 clearly worse, and GPT-5.6 Luna got cheaper but less of
 runs solved, against 5 of 5 without routing). Measure on your own work before trusting it: five
 runs per cell is a small sample. The chart, the spread of the individual runs, the raw data, how
 one run was caught copying from another, and how to run it yourself are in that repository.
+
+The Codex rows were measured when every client defaulted to `JEV_ON_NONE=force_none`. `jev-codex`
+now defaults to `passthrough` (see [How it works](#how-it-works)), so they do not measure its
+current default. The benchmark starts its gateway with `JEV_CLIENT=bench`, which still gets
+`force_none` unless `JEV_ON_NONE` is set.
 
 A [separate 20-run OpenCode series](https://github.com/vinilana/jev-gateway-bench/tree/main/results/2026-09-23-opencode-opus-5-cliproxy-comparison)
 used Opus 5 on the same tasks. With routing on, median output tokens fell by 62% and time by 79% on

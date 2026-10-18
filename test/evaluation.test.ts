@@ -281,6 +281,33 @@ describe("shadow evaluation", () => {
     }
   });
 
+  it("hands the request to the upstream before it reads the conversation for Jev", async () => {
+    const order: string[] = [];
+    const toInput = responsesAdapter.toInput;
+    const spy = vi.spyOn(responsesAdapter, "toInput").mockImplementation((req, maxMessageChars) => {
+      order.push("question");
+      return toInput(req, maxMessageChars);
+    });
+    try {
+      const upstream = fakeUpstream(reply);
+      const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
+        order.push("upstream");
+        return upstream.fetchImpl(input, init);
+      }) as typeof fetch;
+      const logged: Record<string, unknown>[] = [];
+      const app = createApp({
+        config: testConfig({ shadow: true }), askJev: fakeJev({ tool: { choice: "exec" }, needs_tool: { noul: 0.95 } }).askJev,
+        fetch: fetchImpl, log: (entry) => logged.push(entry),
+      });
+      await (await post(app)).json();
+      await settled();
+      expect(order).toEqual(["upstream", "question"]);
+      expect(logged[0]).toMatchObject({ reason: "shadow", shadow: { mode: "forced", tool: "exec" } });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("forwards compressed request bytes and their encoding header as they came", async () => {
     const jev = fakeJev({ tool: { choice: "exec" }, needs_tool: { noul: 0.99 } });
     const bytes = zstdCompressSync(Buffer.from(JSON.stringify(request({ stream: true }))));
@@ -306,6 +333,8 @@ describe("shadow evaluation", () => {
     const logged: Record<string, unknown>[] = [];
     const app = createApp({ config: testConfig({ shadow: true }), askJev: jev.askJev, fetch: fakeUpstream(reply).fetchImpl, log: e => logged.push(e) });
     await post(app);
+    // A line is written when its reply has ended, and a shadowed one also waits for Jev.
+    await settled();
     await app.request("/dashboard/routing?enabled=false", { method: "POST" });
     await post(app);
     await settled();

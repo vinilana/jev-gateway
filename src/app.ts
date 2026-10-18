@@ -235,10 +235,15 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     else if (!routing) decision = { mode: "passthrough", reason: "routing_disabled" };
     else if (config.shadow) {
       // Jev only proposes here, so the request must not wait for it: it leaves now, and the
-      // proposal joins the log line when the reply and the answer are both in. A failure is caught
+      // proposal joins the log line when the reply and the answer are both in. Building Jev's
+      // question waits for the next turn of the event loop, once forwarding has started: on a long
+      // conversation it takes milliseconds the request would otherwise wait for. A failure is caught
       // here, not where the line is written: the evaluation settles long before the reply has been
       // read, and Node ends the process on a rejection that nobody handles in time.
-      evaluation = evaluate(adapter, req).catch((error) => ({ reason: routerError(error) }));
+      const shadowed = req;
+      evaluation = new Promise<void>((resolve) => setImmediate(resolve))
+        .then(() => evaluate(adapter, shadowed))
+        .catch((error: unknown) => ({ reason: routerError(error) }));
       decision = { mode: "passthrough", reason: "shadow" };
     } else ({ decision, tools } = await decideFor(adapter, req));
 

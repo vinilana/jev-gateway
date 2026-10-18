@@ -62,6 +62,21 @@ describe("gateway build identity", () => {
     expect(readBuildId(directory)).toBe(before);
   });
 
+  it("reports no build ID, rather than stopping the gateway, when its files cannot be read", async () => {
+    const missing = join(fixture(), "removed");
+    const buildId = readBuildId(missing);
+    expect(buildId).toBeUndefined();
+    const logged: Record<string, unknown>[] = [];
+    const app = createApp({
+      config: testConfig({ routing: false }), askJev: fakeJev({}).askJev, fetch: fakeUpstream().fetchImpl,
+      log: (entry) => logged.push(entry), buildId,
+    });
+    const response = await app.request("/v1/responses", { method: "POST", body: '{"model":"fixture","input":[]}' });
+    expect(response.status).toBe(200);
+    await settled();
+    expect(JSON.parse(JSON.stringify(logged[0]))).not.toHaveProperty("gatewayBuildId");
+  });
+
   it("keeps a running app's identity when files change until a new app loads the new build", async () => {
     const directory = fixture();
     const buildId = readBuildId(directory);
