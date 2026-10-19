@@ -97,6 +97,8 @@ export interface RouterInput {
    * thinking block, and the provider rejects a thinking conversation that replays it.
    */
   thinking?: boolean;
+  /** Whether this wire format permits synthetic tool calls; allowed unless explicitly false. */
+  directCalls?: boolean;
 }
 
 /** A tool call Jev produced in full, to be rendered in the client's wire format. */

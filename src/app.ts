@@ -349,7 +349,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     // Chat Completions and Anthropic Messages both use `messages`; only Anthropic has a top-level
     // `system` or tools described by `input_schema`. Gemini uses `contents`.
     const tools = Array.isArray(req.tools) ? (req.tools as Record<string, unknown>[]) : [];
-    const guess = "contents" in req
+    const hasContents = "contents" in req || ("request" in req && typeof req.request === "object" && req.request !== null && "contents" in req.request);
+    const guess = hasContents
       ? "gemini"
       : !("messages" in req)
         ? "responses"
@@ -371,6 +372,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/v1/messages", route(messagesAdapter));
   app.post("/v1beta/models/*", route(geminiAdapter));
   app.post("/exa.api_server_pb.ApiServerService/GetChatMessage", route(exaAdapter));
+  app.post("/v1internal:generateContent", route(geminiAdapter));
+  app.post("/v1internal:streamGenerateContent", route(geminiAdapter));
 
   // Everything else (models, embeddings, …) is proxied untouched.
   app.all("/v1/*", async (c) => {
@@ -383,11 +386,10 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
   });
-
-  // The rest of exa (seat management, model catalogue, analytics) is proxied opaque. Only exa:
-  // any other unknown path stays a 404 here rather than reaching upstream with the client's key.
+  // Hono's routers interpret `:*` differently, so Cloud Code's prefix is checked literally here.
+  // Only exa and Cloud Code management calls are proxied; unknown prefixes keep the client's key local.
   app.all("/*", async (c) => {
-    if (!c.req.path.startsWith("/exa.")) return c.notFound();
+    if (!c.req.path.startsWith("/exa.") && !/^\/v1internal([:/]|$)/.test(c.req.path)) return c.notFound();
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
