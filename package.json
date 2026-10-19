@@ -29,6 +29,12 @@
     "url": "https://github.com/vinilana/jev-gateway/issues"
   },
   "type": "module",
+  "exports": {
+    "./server": "./dist/opencode-plugin.js",
+    "./opencode": "./dist/opencode-plugin.js",
+    "./opencode/server": "./dist/opencode-plugin.js",
+    "./*": "./*"
+  },
   "engines": {
     "node": ">=22.15"
   },
@@ -44,6 +50,8 @@
     "dist",
     "bin",
     "scripts/mock-jev.mjs",
+    "docs/opencode-v2-plugin.md",
+    "docs/credential-files.md",
     ".env.example",
     "CHANGELOG.md"
   ],
