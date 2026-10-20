@@ -19,6 +19,8 @@ describe("choosing a provider", () => {
     expect(resolveProvider({ OPENROUTER_API_KEY: "k" })).toBe("openrouter");
     expect(resolveProvider({ AI_GATEWAY_API_KEY: "k" })).toBe("vercel");
     expect(resolveProvider({ OPENCODE_API_KEY: "k" })).toBe("opencode");
+    expect(resolveProvider({ JEV_AI_API_KEY: "k" })).toBe("jevai");
+    expect(resolveProvider({ JEV_AI_API_KEY: "k", TYPESAFE_API_KEY: "k" })).toBe("typesafe");
     expect(resolveProvider({ OPENCODE_API_KEY: "k", TYPESAFE_API_KEY: "k" })).toBe("typesafe");
     expect(resolveProvider({ TYPESAFE_API_KEY: "k", OPENROUTER_API_KEY: "k" })).toBe("typesafe");
     expect(resolveProvider({ TYPESAFE_API_KEY: "k", OPENROUTER_API_KEY: "k", JEV_PROVIDER: "OpenRouter" })).toBe("openrouter");
@@ -43,6 +45,14 @@ describe("choosing a provider", () => {
     expect(resolveModel("openrouter", "typesafe/jev-1.14-20261001")).toBe("typesafe/jev-1.14-20261001");
     expect(resolveModel("vercel", "typesafe-ai/jev-1.14")).toBe("typesafe-ai/jev-1.14");
     expect(resolveModel("opencode", "jev-1.14")).toBe("jev-1.13-free");
+    expect(resolveModel("jevai", "jev-1.14")).toBe("jev-1.14");
+  });
+
+  it("gives Jev AI TypeSafe's model ids, and never a gateway's or OpenCode's", () => {
+    expect(resolveModel("jevai", undefined)).toBe("jev-latest");
+    expect(resolveModel("jevai", "jev-1.13.0")).toBe("jev-1.13.0");
+    expect(resolveModel("jevai", "typesafe/jev-1.13")).toBe("jev-latest");
+    expect(resolveModel("jevai", "jev-1.13-free")).toBe("jev-latest");
   });
 
   it("reads the matching key, endpoint and model into the config", () => {
@@ -51,6 +61,17 @@ describe("choosing a provider", () => {
     expect(loadConfig({ OPENROUTER_API_KEY: "ork" }).jevUrl).toBe("https://openrouter.ai/api/alpha/decisions");
     // The variable TypeSafe's SDK reads still points a local stand-in at the gateway.
     expect(loadConfig({ TYPESAFE_API_KEY: "k", TYPESAFE_BASE_URL: "http://127.0.0.1:8799/" }).jevUrl).toBe("http://127.0.0.1:8799/v1/systemone");
+  });
+
+  it("sends a Jev AI key to jev-ai.pro, never to TypeSafe", () => {
+    expect(loadConfig({ JEV_AI_API_KEY: "jak" })).toMatchObject({
+      jevProvider: "jevai",
+      jevApiKey: "jak",
+      jevModel: "jev-latest",
+      jevUrl: "https://jev-ai.pro/api/v1/systemone",
+    });
+    // TYPESAFE_BASE_URL belongs to TypeSafe's SDK and must not move another provider's key.
+    expect(loadConfig({ JEV_AI_API_KEY: "jak", TYPESAFE_BASE_URL: "http://127.0.0.1:8799" }).jevUrl).toBe("https://jev-ai.pro/api/v1/systemone");
   });
 
   it("uses OpenCode's free model unless the paid one is selected", () => {
@@ -69,7 +90,7 @@ describe("asking Jev", () => {
   const answer = { model: "m", answers: { tool: { type: "choice", choice: "a", confidence: 0.9, probabilities: { a: 0.9, b: 0.1 } } }, usage: { input_tokens: 10, output_tokens: 0 } };
 
   it("posts the same body to whichever provider, with its key as a bearer token", async () => {
-    for (const env of [{ TYPESAFE_API_KEY: "k1" }, { OPENROUTER_API_KEY: "k2" }, { AI_GATEWAY_API_KEY: "k3" }]) {
+    for (const env of [{ TYPESAFE_API_KEY: "k1" }, { OPENROUTER_API_KEY: "k2" }, { AI_GATEWAY_API_KEY: "k3" }, { JEV_AI_API_KEY: "k4" }]) {
       const config = loadConfig(env);
       const { calls, fetchImpl } = capture(() => Response.json(answer));
       const result = await createAskJev(config, fetchImpl)(request);
@@ -101,6 +122,7 @@ describe("asking Jev", () => {
 
   it("says which variable to set when there is no key", () => {
     expect(() => createAskJev(loadConfig({ JEV_PROVIDER: "openrouter" }))).toThrow(/OPENROUTER_API_KEY/);
+    expect(() => createAskJev(loadConfig({ JEV_PROVIDER: "jevai" }))).toThrow(/JEV_AI_API_KEY/);
   });
 });
 
