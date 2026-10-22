@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0](https://github.com/vinilana/jev-gateway/compare/v0.5.1...v0.6.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* jev-codex now defaults to JEV_ON_NONE=passthrough, so Codex keeps its tools when Jev predicts that none is needed. Set JEV_ON_NONE=force_none to keep the old veto; a .env copied from an earlier .env.example already holds that line. Invalid values of JEV_SHADOW, JEV_ROUTING and JEV_DIRECT_CALLS now stop the gateway at startup instead of reading as false.
+
+### Added
+
+* add JEV_SHADOW to record Jev's proposals without applying them ([#61](https://github.com/vinilana/jev-gateway/issues/61)) ([428d078](https://github.com/vinilana/jev-gateway/commit/428d078a0afc391888069a3394f4474a6456de26))
+* keep Jev's routing state within JEV_MAX_STATE_CHARS without splitting tool calls from their results ([71bfdd1](https://github.com/vinilana/jev-gateway/commit/71bfdd18903b24081bf338d0516116fab197bd3d))
+* let Jev see the images in a conversation, and use Jev 1.14 on OpenRouter ([#67](https://github.com/vinilana/jev-gateway/issues/67)) ([83b5b98](https://github.com/vinilana/jev-gateway/commit/83b5b98279f7b932db7f03388d9e95a873025063))
+
+
+### Fixed
+
+* **cli:** treat a gateway as running only when its /health says ok ([628c28e](https://github.com/vinilana/jev-gateway/commit/628c28e2fc733fac6535156439b99c627cb6b908))
+
 ## [0.5.1](https://github.com/vinilana/jev-gateway/compare/v0.5.0...v0.5.1) (2026-10-06)
 
 
