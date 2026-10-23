@@ -22,13 +22,15 @@ const ENV_FILES = [...(FROM_SOURCE && !process.env.JEV_SKIP_PROJECT_ENV ? [join(
  * @param {string} spec.client       binary to run, e.g. "claude"; also names the log/pid files
  * @param {string} spec.portEnv      env var overriding the router port
  * @param {number} spec.defaultPort
- * @param {() => string} spec.upstream        where this client's traffic is forwarded
+ * @param {(context?: unknown) => string} spec.upstream where this client's traffic is forwarded
  * @param {string} spec.upstreamHelp          help text describing the upstream default
  * @param {(origin: string) => string[]} [spec.args]   extra leading arguments for the client
- * @param {(origin: string) => Record<string, string>} [spec.env]  extra environment for the client
- * @param {(origin: string, argv: string[]) => Promise<string[]>} [spec.notices]  what the user should
+ * @param {(origin: string, inherited?: object, context?: unknown) => Record<string, string>} [spec.env] extra environment for the client
+ * @param {() => Promise<unknown>} [spec.detect] resolve client config where the upstream is chosen;
+ *   it throws only to stop the launcher, and a `warning` it returns is printed: either is one line
+ * @param {(origin: string, argv: string[], inherited?: object, context?: unknown) => Promise<string[]>} [spec.notices] what the user should
  *   know before this session starts, e.g. traffic that will not reach the gateway; never throws
- * @param {(origin: string) => string} spec.configHelp  how to wire the client up permanently
+ * @param {(origin: string) => string} spec.configHelp how to wire the client up permanently
  */
 /** Load the key for Jev and friends; real environment variables win over both files. */
 export function loadEnv() {
@@ -45,6 +47,17 @@ export async function runLauncher(spec) {
   const origin = `http://127.0.0.1:${port}`;
   const logFile = join(STATE_DIR, `${spec.client}.log`);
   const pidFile = join(STATE_DIR, `${spec.client}.pid`);
+  let detected;
+  const context = () => (detected ??= Promise.resolve().then(() => spec.detect?.()).then(
+    (found) => {
+      if (typeof found?.warning === "string") console.error(`${spec.name}: ${found.warning}`);
+      return found;
+    },
+    (error) => {
+      console.error(`${spec.name}: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    },
+  ));
 
   const providers = loadProviders(ROOT);
   const providerLabels = Object.values(providers).map((p) => p.label).join(", ");
@@ -95,7 +108,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   /** A notice is a courtesy: whatever goes wrong while working it out, the session still starts. */
   const notices = async (argv) => {
     try {
-      const lines = (await spec.notices?.(origin, argv)) ?? [];
+      const lines = (await spec.notices?.(origin, argv, process.env, await context())) ?? [];
       return lines.map((line, index) => (index === 0 ? `${spec.name}: ${line}` : line));
     } catch {
       return [];
@@ -129,9 +142,11 @@ Environment (or ${ENV_FILES.at(-1)}):
     process.exit(1);
   };
 
-  const ensureRouter = async () => {
-    const upstream = spec.upstream().replace(/\/+$/, "");
+  /** `anyUpstream` is for commands that only talk to the gateway: whichever one runs on the port will do. */
+  const ensureRouter = async ({ anyUpstream = false } = {}) => {
     const running = await health();
+    if (running && anyUpstream) return;
+    const upstream = spec.upstream(await context()).replace(/\/+$/, "");
     if (running) {
       if (running.upstream === upstream) return;
       console.error(`${spec.name}: router on :${port} forwards to ${running.upstream}, expected ${upstream}.`);
@@ -229,7 +244,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   if (flag === "--routing") {
     const wanted = process.argv[3];
     if (wanted !== "on" && wanted !== "off") return console.error(`usage: ${spec.name} --routing on|off`);
-    await ensureRouter();
+    await ensureRouter({ anyUpstream: true });
     const key = process.env.ROUTER_API_KEY ? `&key=${encodeURIComponent(process.env.ROUTER_API_KEY)}` : "";
     const response = await fetch(`${origin}/dashboard/routing?enabled=${wanted === "on"}${key}`, { method: "POST" });
     if (!response.ok) return console.error(`${spec.name}: the router refused (${response.status}). Run \`${spec.name} --stop\` and try again.`);
@@ -242,7 +257,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   if (flag === "--print-config") return console.log(spec.configHelp(origin));
   if (flag === "--start") {
     await ensureRouter();
-    return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream()} (logs: ${logFile})`);
+    return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream(await context())} (logs: ${logFile})`);
   }
   if (flag === "--status") {
     const { running, failure } = await probeHealth();
@@ -265,7 +280,7 @@ Environment (or ${ENV_FILES.at(-1)}):
     return;
   }
   if (flag === "--dashboard") {
-    await ensureRouter();
+    await ensureRouter({ anyUpstream: true });
     // `localhost`, not 127.0.0.1: it is the name WSL forwards to a browser running on Windows.
     const base = `http://localhost:${port}/dashboard`;
     // The page looks for the other launchers' routers on their default ports; tell it about moved ones.
@@ -292,7 +307,7 @@ Environment (or ${ENV_FILES.at(-1)}):
   for (const line of warnings) console.error(line);
   const child = spawn(spec.client, [...(spec.args?.(origin) ?? []), ...process.argv.slice(2)], {
     stdio: "inherit",
-    env: { ...process.env, ...spec.env?.(origin) },
+    env: { ...process.env, ...spec.env?.(origin, process.env, await context()) },
   });
   child.on("error", (error) => {
     console.error(`${spec.name}: could not run ${spec.client}: ${error.message}`);

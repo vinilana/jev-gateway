@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import * as clients from "./clients.mjs";
 
 /** Codex talks to a different backend depending on how the user logged in. */
 function codexUpstream() {
@@ -69,17 +70,101 @@ export const claude = {
     JSON.stringify({ env: { ANTHROPIC_BASE_URL: origin } }, null, 2),
 };
 
-/** Where OpenCode traffic goes by default; override with JEV_OPENCODE_UPSTREAM_BASE_URL. */
-function opencodeUpstream() {
-  return process.env.JEV_OPENCODE_UPSTREAM_BASE_URL ?? "https://api.openai.com/v1";
-}
-
-/** Model id selected as `jev-gateway/<model>`; override with JEV_OPENCODE_MODEL. */
-function opencodeModel() {
-  return process.env.JEV_OPENCODE_MODEL ?? "gpt-5";
-}
-
 const OPENCODE_PROVIDER = "jev-gateway";
+const OPENCODE_UPSTREAMS = { opencode: "https://opencode.ai/zen/v1", "opencode-go": "https://opencode.ai/zen/go/v1" };
+
+const isLocalHost = (hostname) => {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "0.0.0.0" || host === "::1" || host === "::ffff:7f00:1"
+    || host.startsWith("127.") || host.startsWith("::ffff:127.");
+};
+
+/** The plain gateway's own default `PORT` (src/config.ts). */
+const GATEWAY_PORT = 8787;
+
+/**
+ * A local gateway cannot be an upstream, including one started for another client: Jev would be asked
+ * twice. Every launcher in this module counts, so a new one is covered without being listed here.
+ */
+function isGatewayAddress(url, env) {
+  const launchers = Object.values(clients).flatMap((spec) => (typeof spec?.defaultPort === "number" ? [spec.defaultPort] : []));
+  const moved = Object.entries(env).filter(([name]) => /^JEV_[A-Z]+_PORT$/.test(name)).map(([, value]) => Number(value));
+  return isLocalHost(url.hostname) && [GATEWAY_PORT, ...launchers, ...moved].includes(Number(url.port));
+}
+
+// Variables that hold credentials by name. Values shorter than 8 characters would match ordinary path words.
+const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|AUTH/i;
+const SECRET_MIN_LENGTH = 8;
+
+/**
+ * A selected provider's address becomes the upstream, which /health, --status, the dashboard and the
+ * log all show. OpenCode fills `{env:...}` in from any variable, so a token can arrive anywhere in it,
+ * the path included; such an address is not followed.
+ */
+function followableAddress(value, env) {
+  if (typeof value !== "string" || value.includes("{")) return undefined;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
+    if (isGatewayAddress(url, env)) return undefined;
+    const holdsSecret = Object.entries(env).some(([name, secret]) =>
+      SECRET_NAME.test(name) && typeof secret === "string" && secret.length >= SECRET_MIN_LENGTH && value.includes(secret));
+    return holdsSecret ? undefined : value;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where the gateway forwards, from the config OpenCode resolved before the launcher's is laid over it.
+ * An explicit model or upstream is the user's own choice and is taken as given.
+ */
+export function detectOpencode(resolved, env = process.env) {
+  const override = env.JEV_OPENCODE_UPSTREAM_BASE_URL;
+  const openai = { upstream: override ?? "https://api.openai.com/v1", model: env.JEV_OPENCODE_MODEL ?? "gpt-5" };
+  if (env.JEV_OPENCODE_MODEL) return openai;
+  // Zen's or Go's own address names its provider, which is the way to route them where OpenCode cannot say.
+  const named = Object.keys(OPENCODE_UPSTREAMS).find((id) => override?.replace(/\/+$/, "") === OPENCODE_UPSTREAMS[id]);
+  if (named) return { upstream: override, rebind: named };
+  if (override) return openai;
+  const fallback = !env.OPENAI_API_KEY && env.OPENCODE_API_KEY ? { upstream: OPENCODE_UPSTREAMS.opencode, rebind: "opencode" } : openai;
+  const id = providerOf(resolved?.model);
+  if (id && Object.hasOwn(OPENCODE_UPSTREAMS, id)) return { upstream: OPENCODE_UPSTREAMS[id], rebind: id };
+  const provider = id && id !== OPENCODE_PROVIDER && isObject(resolved?.provider) ? resolved.provider[id] : undefined;
+  if (provider?.npm !== "@ai-sdk/openai-compatible") return fallback;
+  const baseURL = followableAddress(provider.options?.baseURL, env);
+  return baseURL ? { upstream: baseURL, rebind: id } : { ...fallback, unfollowed: id };
+}
+
+/** A local address on a port no launcher uses may still be another Jev gateway; its /health says so. */
+async function isJevGateway(upstream, fetchImpl) {
+  try {
+    const url = new URL(upstream);
+    if (!isLocalHost(url.hostname)) return false;
+    const response = await fetchImpl(new URL("/health", url), { signal: AbortSignal.timeout(500) });
+    if (!response.ok) return false;
+    const health = await response.json();
+    return health?.status === "ok" && typeof health.upstream === "string" && typeof health.jev === "string";
+  } catch {
+    return false;
+  }
+}
+
+/** Throws only to stop the launcher with a one-line message: the user's own upstream cannot be used. */
+async function checkOverride(override, env, fetchImpl) {
+  let url;
+  try {
+    url = new URL(override);
+  } catch {
+    return;
+  }
+  if (isGatewayAddress(url, env) || (await isJevGateway(override, fetchImpl))) {
+    throw new Error(`JEV_OPENCODE_UPSTREAM_BASE_URL points at a Jev gateway (${url.origin}); set it to the provider's own API root.`);
+  }
+}
+
+// Direct spec calls keep the original OpenAI default; the launcher passes OpenCode's resolved setup.
+const directOpencodeSetup = () => detectOpencode(undefined, { JEV_OPENCODE_MODEL: process.env.JEV_OPENCODE_MODEL });
 
 /**
  * Stable custom-provider config for the launched OpenCode process. Injected through
@@ -92,8 +177,14 @@ const OPENCODE_PROVIDER = "jev-gateway";
  * key swap applies here. TYPESAFE_API_KEY is separate — it only authorizes the Jev
  * tool-selection call and is never sent as the LLM upstream credential.
  */
-function opencodeInlineConfig(origin) {
-  const model = opencodeModel();
+function opencodeInlineConfig(origin, setup = directOpencodeSetup()) {
+  if (setup.rebind) {
+    return {
+      $schema: "https://opencode.ai/config.json",
+      provider: { [setup.rebind]: { options: { baseURL: `${origin}/v1` } } },
+    };
+  }
+  const model = setup.model;
   return {
     $schema: "https://opencode.ai/config.json",
     model: `${OPENCODE_PROVIDER}/${model}`,
@@ -130,19 +221,24 @@ export function parseJsonc(text) {
 
 /**
  * OpenCode and Kilo inline config each use one variable that the user may already set. Theirs is kept
- * and the gateway's is laid over it: the default models and the `jev-gateway` provider are the
- * launcher's to set, everything else (agents, permissions, other providers) stays as they wrote
- * it. Content that is not a JSON object cannot be merged, so it is dropped, and the notices say so.
+ * and the gateway's is laid over it: the default models and the fields the launcher sets on a
+ * provider are the launcher's, everything else (that provider's other options, agents, permissions,
+ * other providers) stays as they wrote it. Content that is not a JSON object cannot be merged, so it
+ * is dropped, and the notices say so.
  */
 function inlineConfigContent(ours, inherited) {
   const theirs = inherited?.trim() ? parseJsonc(inherited) : undefined;
   if (!isObject(theirs)) return JSON.stringify(ours);
-  const provider = { ...(isObject(theirs.provider) ? theirs.provider : {}), ...ours.provider };
+  const provider = { ...(isObject(theirs.provider) ? theirs.provider : {}) };
+  for (const [id, change] of Object.entries(ours.provider)) {
+    const previous = isObject(provider[id]) ? provider[id] : {};
+    provider[id] = { ...previous, ...change, options: { ...(isObject(previous.options) ? previous.options : {}), ...change.options } };
+  }
   return JSON.stringify({ ...theirs, ...ours, provider });
 }
 
-export function opencodeConfigContent(origin, inherited) {
-  return inlineConfigContent(opencodeInlineConfig(origin), inherited);
+export function opencodeConfigContent(origin, inherited, setup = directOpencodeSetup()) {
+  return inlineConfigContent(opencodeInlineConfig(origin, setup), inherited);
 }
 
 const providerOf = (model) => (typeof model === "string" && model.includes("/") ? model.slice(0, model.indexOf("/")) : undefined);
@@ -167,8 +263,7 @@ function modelFlag(argv) {
  * provider. Those are the user's choices and are left alone, but a session that quietly skips Jev
  * looks exactly like one where Jev had nothing to decide, so they are said out loud.
  *
- * `resolved` is what `opencode debug config` prints: OpenCode's own merge of every config source,
- * which is the only reliable way to know what an agent will use. A provider counts as covered by
+ * `resolved` comes from OpenCode's own v1 config command or v2 local API. A provider counts as covered by
  * where it sends requests, not by its name, so one the user pointed at the gateway (`origin`)
  * themselves is not reported.
  */
@@ -194,25 +289,69 @@ export function opencodeOutsideGateway(resolved, argv = [], origin) {
   return [
     "these go straight to their provider, not through the gateway, because they name a model of their own:",
     ...outside.map((line) => `  - ${line}`),
-    `Jev only sees requests to ${OPENCODE_PROVIDER}/* models. Agents without a model of their own use the default and are covered.`,
+    `Jev sees requests sent to ${origin ?? "the gateway"}. Agents without a model of their own use the default.`,
   ];
 }
 
-/** Ask OpenCode how it resolves its configuration with ours laid over it. Undefined when it cannot say. */
-function opencodeResolvedConfig(env) {
+/**
+ * Run a local OpenCode inspection command. None of its output is logged: provider settings may contain keys.
+ * `answered` is false when OpenCode failed or printed no JSON, `timedOut` when it did not finish.
+ */
+function opencodeJson(args, env) {
   return new Promise((resolve) => {
-    execFile("opencode", ["debug", "config"], { env, timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      if (error) return resolve(undefined);
-      // Log lines may come first, and may hold braces of their own: the JSON starts on a line of its own.
+    execFile("opencode", args, { env, timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve({ timedOut: error.killed === true });
+      // Log lines may come first, and may hold braces or brackets of their own: the JSON starts on a line of its own.
       const start = stdout.search(/^\{/m);
-      if (start < 0) return resolve(undefined);
+      if (start < 0) return resolve({});
       try {
-        resolve(JSON.parse(stdout.slice(start)));
+        resolve({ json: JSON.parse(stdout.slice(start)) });
       } catch {
-        resolve(undefined);
+        resolve({});
       }
     });
   });
+}
+
+/**
+ * V1 prints a resolved object; V2 has no `debug config` and exposes the selected model and provider
+ * through its local API instead. An OpenCode that hangs is asked nothing more, so it costs one timeout.
+ */
+async function opencodeResolvedConfig(env) {
+  const old = await opencodeJson(["debug", "config"], env);
+  if (isObject(old.json)) return old.json;
+  if (old.timedOut) return undefined;
+  const [{ json: model }, { json: providers }, { json: agents }] = await Promise.all([
+    opencodeJson(["api", "--standalone", "model.default"], env),
+    opencodeJson(["api", "--standalone", "provider.list"], env),
+    opencodeJson(["api", "--standalone", "agent.list"], env),
+  ]);
+  const selected = model?.data;
+  if (typeof selected?.providerID !== "string" || typeof selected?.modelID !== "string") return undefined;
+  const provider = Array.isArray(providers?.data) ? providers.data.find((entry) => entry?.id === selected.providerID) : undefined;
+  const agent = Object.fromEntries((Array.isArray(agents?.data) ? agents.data : []).flatMap((entry) =>
+    typeof entry?.name === "string" && typeof entry?.model?.providerID === "string" && typeof entry?.model?.modelID === "string"
+      ? [[entry.name, { model: `${entry.model.providerID}/${entry.model.modelID}` }]] : []));
+  return {
+    model: `${selected.providerID}/${selected.modelID}`,
+    provider: { [selected.providerID]: { npm: provider?.package, options: { baseURL: provider?.settings?.baseURL } } },
+    agent,
+  };
+}
+
+/** A selected provider that is not followed falls back, and the user is told so in one line. */
+function withWarning(setup) {
+  if (setup.unfollowed === undefined) return setup;
+  const warning = `the default model's provider "${setup.unfollowed}" has no address the launcher can follow ` +
+    `(see "Where OpenCode traffic goes" in the README), so the gateway forwards to ${setup.upstream}.`;
+  return { ...setup, warning };
+}
+
+/** What OpenCode resolves for this session, with the launcher's config in it. Undefined when it is not to be asked or cannot say. */
+async function sessionConfig(origin, inherited, setup) {
+  if (inherited.JEV_OPENCODE_CHECK === "off") return undefined;
+  if (!Object.hasOwn(setup, "resolved")) return opencodeResolvedConfig({ ...inherited, ...opencode.env(origin, inherited, setup) });
+  return isObject(setup.resolved) ? JSON.parse(opencodeConfigContent(origin, JSON.stringify(setup.resolved), setup)) : undefined;
 }
 
 export const opencode = {
@@ -220,32 +359,47 @@ export const opencode = {
   client: "opencode",
   portEnv: "JEV_OPENCODE_PORT",
   defaultPort: 8791,
-  upstream: opencodeUpstream,
+  // Run only where the upstream is chosen. `resolved` is kept so the notices need not ask again.
+  detect: async (inherited = process.env, fetchImpl = fetch) => {
+    const override = inherited.JEV_OPENCODE_UPSTREAM_BASE_URL;
+    if (override) await checkOverride(override, inherited, fetchImpl);
+    if (override || inherited.JEV_OPENCODE_MODEL || inherited.JEV_OPENCODE_CHECK === "off") return detectOpencode(undefined, inherited);
+    const resolved = await opencodeResolvedConfig(inherited);
+    const setup = detectOpencode(resolved, inherited);
+    const custom = setup.rebind !== undefined && !Object.hasOwn(OPENCODE_UPSTREAMS, setup.rebind);
+    if (custom && (await isJevGateway(setup.upstream, fetchImpl))) {
+      return withWarning({ ...detectOpencode(undefined, inherited), unfollowed: setup.rebind, resolved });
+    }
+    return withWarning({ ...setup, resolved });
+  },
+  upstream: (setup = detectOpencode(undefined, process.env)) => setup.upstream,
   upstreamHelp:
-    "JEV_OPENCODE_UPSTREAM_BASE_URL   where OpenCode traffic goes (default https://api.openai.com/v1)\n" +
-    "  JEV_OPENCODE_MODEL               model selected as jev-gateway/<model> (default gpt-5)\n" +
-    "  JEV_OPENCODE_CHECK               off skips listing the agents that bypass the gateway (saves about a second)",
+    "JEV_OPENCODE_UPSTREAM_BASE_URL   where OpenCode traffic goes (default follows its selected provider)\n" +
+    "  JEV_OPENCODE_MODEL               use jev-gateway/<model> on OpenAI instead of following the config\n" +
+    "  JEV_OPENCODE_CHECK               off asks OpenCode nothing: no provider to follow, no list of agents that bypass the gateway",
   // No `args`: the model default comes from the injected config below, so a user `-m provider/model`
   // keeps its documented top priority and every other `opencode` flag forwards untouched.
   // The two experimental flags stay off for the launched process only (environment, never a user
   // file): the stable AI SDK provider path above is the supported one.
-  env: (origin, inherited = process.env) => ({
-    OPENCODE_CONFIG_CONTENT: opencodeConfigContent(origin, inherited.OPENCODE_CONFIG_CONTENT),
+  env: (origin, inherited = process.env, setup = directOpencodeSetup()) => ({
+    OPENCODE_CONFIG_CONTENT: opencodeConfigContent(origin, inherited.OPENCODE_CONFIG_CONTENT, setup),
     OPENCODE_EXPERIMENTAL_NATIVE_LLM: "false",
     OPENCODE_EXPERIMENTAL_CODE_MODE: "false",
   }),
-  // Asking OpenCode costs about a second, which is OpenCode loading its configuration.
-  // JEV_OPENCODE_CHECK=off skips that part; an inline config that had to be dropped is always said.
-  notices: async (origin, argv, inherited = process.env) => {
+  // Asking OpenCode costs about a second, which is OpenCode loading its configuration. When detection
+  // already asked, its answer is reused with the launcher's config laid over it the same way the
+  // session gets it. JEV_OPENCODE_CHECK=off skips that part; an inline config that had to be dropped
+  // is always said.
+  notices: async (origin, argv, inherited = process.env, setup = detectOpencode(undefined, inherited)) => {
     const content = inherited.OPENCODE_CONFIG_CONTENT;
     const dropped = content?.trim() && !isObject(parseJsonc(content))
       ? ["OPENCODE_CONFIG_CONTENT in your environment is not a JSON object, so this session gets only the gateway's settings from it."]
       : [];
-    if (inherited.JEV_OPENCODE_CHECK === "off") return dropped;
-    const resolved = await opencodeResolvedConfig({ ...inherited, ...opencode.env(origin, inherited) });
-    const outside = opencodeOutsideGateway(resolved, argv, origin);
-    // The launcher prefixes only the first line with its name; a second notice needs its own.
-    return dropped.length && outside.length ? [...dropped, `${opencode.name}: ${outside[0]}`, ...outside.slice(1)] : [...dropped, ...outside];
+    const resolved = await sessionConfig(origin, inherited, setup);
+    const outside = resolved === undefined ? [] : opencodeOutsideGateway(resolved, argv, origin);
+    // The launcher prefixes only the first line with its name; every later notice needs its own.
+    return [dropped, outside].filter((lines) => lines.length > 0)
+      .flatMap((lines, index) => (index === 0 ? lines : [`${opencode.name}: ${lines[0]}`, ...lines.slice(1)]));
   },
   configHelp: (origin) => {
     // No OPENCODE_CONFIG_CONTENT one-liner here: single-quoting raw JSON breaks when a custom
@@ -257,7 +411,9 @@ export const opencode = {
       `# Keep the gateway running (jev-opencode --start), then add to opencode.json\n` +
       `# (project root or ~/.config/opencode/opencode.json):\n` +
       `${manual}\n` +
-      `# then select it with: opencode --model ${config.model}`
+      `# then select it with: opencode --model ${config.model}\n` +
+      `# To keep your own provider instead, set its options.baseURL to ${origin}/v1 and start the gateway\n` +
+      `# with JEV_OPENCODE_UPSTREAM_BASE_URL set to the address it had.`
     );
   },
 };

@@ -16,7 +16,7 @@ interface LauncherSpec {
   upstream: () => string;
   upstreamHelp: string;
   configHelp: (origin: string) => string;
-  notices?: (origin: string, argv: string[]) => Promise<string[]>;
+  notices?: (origin: string, argv: string[], inherited?: object, context?: unknown) => Promise<string[]>;
 }
 
 const spec: LauncherSpec = {
@@ -119,7 +119,7 @@ describe("--status", () => {
 
     const text = await runStatus({ ...spec, notices });
 
-    expect(notices).toHaveBeenCalledWith("http://127.0.0.1:54321", ["--model", "custom/model"]);
+    expect(notices).toHaveBeenCalledWith("http://127.0.0.1:54321", ["--model", "custom/model"], process.env, undefined);
     expect(text).toContain("jev-status-test: received --model custom/model");
     expect(text).toContain("another notice");
   });
