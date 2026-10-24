@@ -99,6 +99,8 @@ export interface RouterInput {
    * thinking block, and the provider rejects a thinking conversation that replays it.
    */
   thinking?: boolean;
+  /** Whether this wire format permits synthetic tool calls; allowed unless explicitly false. */
+  directCalls?: boolean;
   /** Inline images the turns refer to; the newest that fit Jev's limits are sent along. */
   images?: Images;
 }
