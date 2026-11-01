@@ -13,12 +13,16 @@ export function loadProviders(root) {
 }
 
 const present = (env, name) => Boolean(env[name]?.trim());
+const configured = (env, name) => present(env, name) || env[`${name}_FILE`] !== undefined;
 
 /** Same rule as the gateway: an explicit JEV_PROVIDER, else whichever key is there. */
 export function configuredProvider(env, providers) {
   const chosen = env.JEV_PROVIDER?.trim().toLowerCase();
-  const id = chosen && providers[chosen] ? chosen : Object.keys(providers).find((name) => present(env, providers[name].keyEnv));
-  return id && present(env, providers[id].keyEnv) ? id : undefined;
+  if (chosen && !providers[chosen]) throw new Error(`JEV_PROVIDER must be one of ${Object.keys(providers).join(", ")}`);
+  const id = chosen || Object.keys(providers).find((name) => configured(env, providers[name].keyEnv));
+  // The gateway validates/reads only the selected file at startup. Do not prompt
+  // or switch providers merely because an explicitly configured file is invalid.
+  return id && configured(env, providers[id].keyEnv) ? id : undefined;
 }
 
 /** Set `values` in the text of a .env file, replacing lines that exist and keeping everything else. */
@@ -62,7 +66,11 @@ export async function validateKey(provider, key, fetchImpl = fetch) {
     }
     if (response.ok) return { ok: true, ms: Date.now() - startedAt };
     const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
-    return { ok: false, refused: response.status === 401 || response.status === 403, reason: `${response.status} ${detail}`.trim() };
+    return {
+      ok: false,
+      refused: response.status === 401 || response.status === 403,
+      reason: `${response.status} ${detail}`.trim(),
+    };
   } catch (error) {
     return { ok: false, refused: false, reason: error instanceof Error ? error.message : String(error) };
   }
@@ -98,7 +106,9 @@ export async function runSetup({ name, providers, envFile, io, validate = valida
     let result = await validate(provider, key);
     let model = provider.model;
     if (result.freeUnavailable && provider.paidModel) {
-      const paid = (await io.ask(`Use paid ${provider.paidModel} for Jev? Its key check may be billed. [y/N]: `)).trim().toLowerCase();
+      const paid = (await io.ask(`Use paid ${provider.paidModel} for Jev? Its key check may be billed. [y/N]: `))
+        .trim()
+        .toLowerCase();
       if (paid === "y" || paid === "yes") {
         model = provider.paidModel;
         result = await validate({ ...provider, model, paidModel: undefined }, key);
@@ -108,7 +118,9 @@ export async function runSetup({ name, providers, envFile, io, validate = valida
       }
     }
     if (!result.ok && result.refused) {
-      io.print(`${provider.label} refused that key (${result.reason}).${attempt < 3 ? " Try again, or press Enter to stop." : ""}`);
+      io.print(
+        `${provider.label} refused that key (${result.reason}).${attempt < 3 ? " Try again, or press Enter to stop." : ""}`,
+      );
       continue;
     }
     if (!result.ok) {
@@ -157,5 +169,9 @@ export function terminalIo(input = process.stdin, output = process.stdout) {
       };
       input.on("data", onData);
     });
-  return { print: (line) => output.write(line + "\n"), ask: (prompt) => read(prompt, false), askSecret: (prompt) => read(prompt, true) };
+  return {
+    print: (line) => output.write(line + "\n"),
+    ask: (prompt) => read(prompt, false),
+    askSecret: (prompt) => read(prompt, true),
+  };
 }

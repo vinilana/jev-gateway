@@ -1,5 +1,8 @@
 # jev-gateway
 
+Additional integrations: [native OpenCode V2 final-request plugin](docs/opencode-v2-plugin.md)
+and [decision-provider credential files](docs/credential-files.md).
+
 A local LLM gateway for coding agents. When your agent is about to decide **which tool to call**,
 the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast decision model,
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
