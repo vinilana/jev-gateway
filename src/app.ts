@@ -37,11 +37,31 @@ const safeEqual = (a: string, b: string) => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
+/**
+ * A request body is decompressed before it is parsed, and deflate expands up to roughly 1032:1,
+ * so the size on the wire says nothing about the size of the buffer this allocates. A 2 MB gzip
+ * body is 2 GB of output. `maxOutputLength` is the only bound that holds: it makes the decoder
+ * give up while the buffer is still growing, instead of after. The value is a policy choice, not
+ * a measured requirement — it is comfortably above the largest body a chat request carries.
+ */
+const MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024;
+
+/** Thrown when a body decompresses past MAX_DECOMPRESSED_BYTES, so the route can answer 413. */
+class BodyTooLarge extends Error {
+  constructor() {
+    super(`request body exceeds ${MAX_DECOMPRESSED_BYTES} bytes once decompressed`);
+    this.name = "BodyTooLarge";
+  }
+}
+
+const decompressor = (decode: (data: Uint8Array, options: { maxOutputLength: number }) => Buffer) => (data: Uint8Array) =>
+  decode(data, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
+
 const DECODERS: Record<string, (data: Uint8Array) => Buffer> = {
-  zstd: zstdDecompressSync,
-  gzip: gunzipSync,
-  br: brotliDecompressSync,
-  deflate: inflateSync,
+  zstd: decompressor(zstdDecompressSync),
+  gzip: decompressor(gunzipSync),
+  br: decompressor(brotliDecompressSync),
+  deflate: decompressor(inflateSync),
 };
 
 /** Parse a JSON body, undoing request compression (Codex sends zstd). Undefined if unreadable. */
@@ -51,7 +71,10 @@ function parseBody<Req>(bytes: Uint8Array, encoding: string | undefined): Req | 
     if (encoding && !decoder) return undefined;
     const parsed: unknown = JSON.parse(Buffer.from(decoder ? decoder(bytes) : bytes).toString("utf8"));
     return parsed && typeof parsed === "object" ? (parsed as Req) : undefined;
-  } catch {
+  } catch (error) {
+    // A body that is too large is a client error, not an unreadable one: say so instead of
+    // pretending it never arrived. Everything else stays undefined and passes through.
+    if ((error as { code?: string } | undefined)?.code === "ERR_BUFFER_TOO_LARGE") throw new BodyTooLarge();
     return undefined;
   }
 }
@@ -216,7 +239,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     let req: Req | undefined;
     try {
       req = adapter.parse ? adapter.parse(bytes, encoding) : parseBody<Req>(bytes, encoding);
-    } catch {
+    } catch (error) {
+      if (error instanceof BodyTooLarge) return c.json({ error: "request body too large" }, 413);
       req = undefined;
     }
     dump?.("request", {
