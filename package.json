@@ -63,11 +63,14 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
-    "hono": "^4.13.8"
+    "hono": "^4.13.8",
+    "read-cmd-shim": "^5.0.0",
+    "which": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",
     "@typesafe-ai/sdk": "^0.6.0",
+    "cmd-shim": "^7.0.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"

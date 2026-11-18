@@ -35,6 +35,10 @@ jev-gemini     # Gemini CLI, with a Gemini API key
 jev-devin      # use it exactly like `devin`
 ```
 
+On Windows, launchers support native executables and npm shims with a plain `node` shebang.
+Prompts, including multiline text and JSON, are passed directly to the client. Custom batch
+files and shims for other interpreters are not supported.
+
 **3. Answer two questions, once**
 
 The first time, the launcher asks where you want to reach Jev and for the key. It checks the key
