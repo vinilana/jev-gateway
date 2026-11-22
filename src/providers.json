@@ -13,7 +13,7 @@
     "keyEnv": "OPENROUTER_API_KEY",
     "keyUrl": "https://openrouter.ai/settings/keys",
     "url": "https://openrouter.ai/api/alpha/decisions",
-    "model": "typesafe/jev-1.13"
+    "model": "typesafe/jev-1.14"
   },
   "vercel": {
     "label": "Vercel AI Gateway",

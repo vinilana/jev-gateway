@@ -1,14 +1,16 @@
-import { truncate } from "../state.js";
+import { collectImages } from "../images.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
 
 export interface GeminiPart {
   text?: string;
   functionCall?: {
+    id?: string;
     name: string;
     args?: Record<string, unknown>;
   };
   functionResponse?: {
+    id?: string;
     name: string;
     response?: Record<string, unknown>;
   };
@@ -49,53 +51,66 @@ export interface GeminiRequest {
   [key: string]: unknown;
 }
 
+/** The functions the router can offer, and the names of the tools Google runs itself beside them. */
+function visibleTools(tools: GeminiTool[], allowed: Set<string> | undefined) {
+  const declarations = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  // Hosted tools must be counted the same way for routed and baseline requests.
+  const hosted = [...new Set(tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations")))];
+  return { declarations, hosted };
+}
+
+// A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
+const allowedFunctions = (config: { allowedFunctionNames?: string[] } | undefined) =>
+  config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
+
 /** Google Gemini API (`POST /v1beta/models/...:generateContent` and `:streamGenerateContent`). */
 function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
   if (!Array.isArray(req.contents)) return { skip: "no_messages" };
   const config = req.toolConfig?.functionCallingConfig;
-  // A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
-  const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
-  const rawDecls = (req.tools ?? []).flatMap((t) => t.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  const { declarations: rawDecls, hosted } = visibleTools(req.tools ?? [], allowedFunctions(config));
   if (rawDecls.length === 0) return { skip: "no_tools" };
-  // Tools Google runs itself (googleSearch, codeExecution, urlContext) are entries without
-  // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
-  const hosted = (req.tools ?? []).flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
 
   const systemParts = (req.systemInstruction?.parts ?? [])
     .map((p) => p.text)
     .filter((t): t is string => typeof t === "string" && t.length > 0);
-  const system = truncate(systemParts.join("\n\n"), maxMessageChars);
+  const system = systemParts.join("\n\n");
 
+  const images = collectImages();
   const turns: RouterInput["turns"] = [];
   for (const content of req.contents) {
     const role = content.role === "model" ? "assistant" : "user";
     const textParts: string[] = [];
-    const toolCalls: Array<{ tool: string; arguments: string }> = [];
+    const toolCalls: Array<{ tool: string; arguments: string; call_id?: string }> = [];
+    const flush = () => {
+      if (textParts.length || toolCalls.length) turns.push({ role,
+        ...(textParts.length ? { text: textParts.splice(0).join("\n") } : {}),
+        ...(toolCalls.length ? { tool_calls: toolCalls.splice(0) as unknown as Json[] } : {}) });
+    };
 
     for (const part of content.parts ?? []) {
+      const image = images.ref(part);
       if (part.text) {
         textParts.push(part.text);
+      } else if (image) {
+        textParts.push(image);
       } else if (part.functionCall) {
         toolCalls.push({
           tool: part.functionCall.name,
-          arguments: truncate(JSON.stringify(part.functionCall.args ?? {}), maxMessageChars),
+          ...(typeof part.functionCall.id === "string" ? { call_id: part.functionCall.id } : {}),
+          arguments: JSON.stringify(part.functionCall.args ?? {}),
         });
       } else if (part.functionResponse) {
+        flush();
         turns.push({
           role: "tool_result",
           tool: part.functionResponse.name,
-          content: truncate(JSON.stringify(part.functionResponse.response ?? {}), maxMessageChars),
+          ...(typeof part.functionResponse.id === "string" ? { call_id: part.functionResponse.id } : {}),
+          content: JSON.stringify(part.functionResponse.response ?? {}),
         });
       }
     }
 
-    if (textParts.length || toolCalls.length) {
-      turns.push({
-        role,
-        ...(textParts.length ? { text: truncate(textParts.join("\n"), maxMessageChars) } : {}),
-        ...(toolCalls.length ? { tool_calls: toolCalls as unknown as Json[] } : {}),
-      });
-    }
+    flush();
   }
 
   const mode = config?.mode ?? "AUTO";
@@ -106,9 +121,10 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
     turns,
     tools: [
       ...rawDecls.map((fn) => ({ kind: "function" as const, name: fn.name, description: fn.description, parameters: fn.parameters })),
-      ...[...new Set(hosted)].map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
+      ...hosted.map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
     ],
     toolChoice,
+    images,
   };
 }
 
@@ -172,10 +188,18 @@ function fromUrl(url: URL) {
   return { model: match?.[1], stream: match?.[2] === "streamGenerateContent" };
 }
 
+/** Count individual functions and hosted tools, even when routing is switched off. */
+function metadata(req: GeminiRequest | undefined) {
+  if (!Array.isArray(req?.tools)) return {};
+  const { declarations, hosted } = visibleTools(req.tools, allowedFunctions(req.toolConfig?.functionCallingConfig));
+  return { tools: declarations.length + hosted.length };
+}
+
 export const geminiAdapter: Adapter<GeminiRequest> = {
   toInput,
   apply,
   directJson,
   directStream,
   fromUrl,
+  metadata,
 };

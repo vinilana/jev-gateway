@@ -9,7 +9,6 @@ import { fakeJev, fakeUpstream, testConfig } from "./helpers.js";
 const clientsModule: string = "../bin/clients.mjs";
 const clients = await import(clientsModule);
 
-
 const globTool = {
   type: "function",
   function: {
@@ -146,7 +145,7 @@ const others = [clients.codex, clients.claude, clients.opencode, clients.gemini]
 const origin = "http://127.0.0.1:8793";
 const launcherBin = fileURLToPath(new URL("../bin/jev-kilo.mjs", import.meta.url));
 
-const managedEnv = ["JEV_KILO_UPSTREAM_BASE_URL", "JEV_KILO_MODEL"] as const;
+const managedEnv = ["JEV_KILO_UPSTREAM_BASE_URL", "JEV_KILO_MODEL", "KILO_CONFIG_CONTENT"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -204,6 +203,28 @@ describe("jev-kilo spec", () => {
     expect(kilo.args).toBeUndefined();
   });
 
+  it("keeps inherited JSONC settings and other providers while replacing gateway wiring", () => {
+    const inherited = `{
+      // The launched process must retain these settings.
+      "permission": { "edit": "ask" },
+      "agent": { "review": { "model": "other/reviewer" } },
+      "plugin": ["local-plugin"],
+      "provider": {
+        "other": { "options": { "baseURL": "https://other.test/v1" } },
+        "jev-gateway": { "options": { "baseURL": "https://old.test" } },
+      },
+    }`;
+    process.env.KILO_CONFIG_CONTENT = inherited;
+    const config = inlineConfig();
+    expect(config.permission).toEqual({ edit: "ask" });
+    expect(config.agent).toEqual({ review: { model: "other/reviewer" } });
+    expect(config.plugin).toEqual(["local-plugin"]);
+    expect(config.provider.other.options.baseURL).toBe("https://other.test/v1");
+    expect(config.provider["jev-gateway"].options.baseURL).toBe(`${origin}/v1`);
+    expect(config.model).toBe("jev-gateway/kilo-auto/free");
+    expect(process.env.KILO_CONFIG_CONTENT).toBe(inherited);
+  });
+
   it("prints permanent wiring help whose JSON parses as-is", () => {
     const help = kilo.configHelp(origin);
     expect(help).toContain("jev-kilo --start");
@@ -211,6 +232,11 @@ describe("jev-kilo spec", () => {
     expect(help).toContain("--model jev-gateway/kilo-auto/free");
     const parsed = JSON.parse(help.slice(help.indexOf("{"), help.lastIndexOf("}") + 1)) as any;
     expect(parsed.provider["jev-gateway"].options.baseURL).toBe(`${origin}/v1`);
+  });
+
+  it("reports invalid inherited inline settings instead of dropping them silently", async () => {
+    expect((await clients.kilo.notices(origin, [], { KILO_CONFIG_CONTENT: "{ invalid" })).join("\n")).toContain("KILO_CONFIG_CONTENT");
+    expect(await clients.kilo.notices(origin, [], { KILO_CONFIG_CONTENT: '{ "permission": {}, }' })).toEqual([]);
   });
 });
 

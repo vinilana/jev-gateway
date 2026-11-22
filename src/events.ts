@@ -19,10 +19,12 @@ export interface RouteEvent {
   status?: number;
   /** How long the whole request took, reply included. */
   durationMs?: number;
+  /** Whether shadow evaluation was in force: set on every line, including requests it never asked Jev about. */
+  shadowMode?: boolean;
   /** What the LLM call cost, as the provider reported it; absent for `direct` and failed calls. */
   usage?: { input: number; output: number; cached: number; cacheWrite: number; reasoning: number };
   /** Present whenever Jev answered, even if the router then let the LLM decide. */
-  jev?: { choice: string; confidence: number; latencyMs: number; inputTokens: number; shortlist?: string[] };
+  jev?: { choice: string; confidence: number; latencyMs: number; inputTokens: number; shortlist?: string[]; images?: number };
 }
 
 export interface EventLog {
@@ -57,6 +59,7 @@ function toEvent(entry: Record<string, unknown>, seq: number): RouteEvent | unde
     confidence: number(entry.confidence),
     status: number(entry.status),
     durationMs: number(entry.durationMs),
+    shadowMode: typeof entry.shadowMode === "boolean" ? entry.shadowMode : undefined,
     usage: usage && {
       input: number(usage.input) ?? 0,
       output: number(usage.output) ?? 0,
@@ -70,6 +73,7 @@ function toEvent(entry: Record<string, unknown>, seq: number): RouteEvent | unde
       latencyMs: number(jev.latencyMs) ?? 0,
       inputTokens: number(jev.inputTokens) ?? 0,
       shortlist: Array.isArray(jev.shortlist) ? jev.shortlist.flatMap((name) => text(name) ?? []) : undefined,
+      images: number(jev.images),
     },
   };
 }

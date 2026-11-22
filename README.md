@@ -120,8 +120,8 @@ only the gateway that serves the page.
 
 You will see:
 
-- **A status per gateway:** Routing, Passthrough only, Jev is failing, Idle, Baseline, or Offline,
-  with a one-line explanation.
+- **A status per gateway:** Routing, Passthrough only, Jev is failing, Idle, Baseline, Shadow
+  evaluation, or Offline, with a one-line explanation.
 - **Why requests were not routed,** with each reason explained in plain English.
 - **Jev's numbers:** calls, latency, confidence, and what it cost.
 - **LLM tokens:** input (and how much came from the prompt cache), output (and how much was hidden
@@ -145,6 +145,49 @@ The same switch is a button on each gateway card. The "Token use" card then show
 by side: tokens in and out per request, cache share, reasoning tokens, and seconds. The comparison
 is only meaningful if you do similar work in both states.
 
+### Evaluate Jev without applying it
+
+Shadow evaluation records what Jev would do and changes nothing. It is read at startup, so restart
+the gateway with it on:
+
+```bash
+jev-codex --stop
+JEV_SHADOW=true jev-codex --start
+```
+
+A request that would ask Jev is forwarded at once, byte for byte as the client sent it: same model,
+same tool choice, same prompt, compression included. Jev is asked at the same time, and its
+proposal joins the log line when both the reply and Jev's answer are in. Nothing it decides is
+applied: no forced tool, no direct answer, no hint, no `ARGS_MODEL`.
+
+- **The request does not wait for Jev.** Jev runs beside the request instead of in front of it. The
+  gateway starts forwarding the request first and only then reads the conversation and builds
+  Jev's question, so not even that local work holds it up. A slow or failing Jev never touches the
+  reply, and `durationMs` measures the reply, not Jev. The reply's `x-jev-gateway-reason` header
+  reads `shadow`, with no tool, confidence or latency headers, because none of that exists yet when
+  the reply starts. It reads `shadow` even for a request Jev then turns out not to have been asked
+  about; the log line has the real reason.
+- **Jev still costs tokens.** Each request is still one Jev call (two for long tool lists).
+- **The proposal is in `shadow`:** its `mode`, plus `reason`, `tool`, `kind` and `confidence` where
+  they apply. A `direct` proposal does not copy the arguments. The line itself reads `passthrough`
+  with reason `shadow`, and `jev` holds the usual trace.
+- **A proposal exists only when Jev answered.** Other lines keep their own reason and have no
+  `shadow`: requests Jev is never asked about (`agent_message`, `codex_auto_review`,
+  `unreadable_request`, `no_tools`, routing off, `x-jev-gateway: off`) and Jev failures
+  (`jev_error`, `jev_unexpected_answer`).
+- **The reply it is compared with is only logged for the Responses API.** `response.tools` lists
+  the tools the reply used. Other wire formats log token counts and no `response`.
+  A proposal that matches the tool the model used does not show that forcing it would have saved
+  anything or made the answer better.
+- **`shadowMode` is on every line** while the setting and routing are both on, including requests
+  Jev was never asked about. The dashboard labels the state "Shadow evaluation" and keeps its token
+  averages in a column of their own.
+- **`POST /router/decide` ignores shadow.** It is a dry run: it returns Jev's real decision and
+  writes no log line.
+
+Restart without `JEV_SHADOW=true` to return to normal routing, or set `JEV_ROUTING=off` for a
+baseline that never asks Jev.
+
 ## Where Jev runs
 
 Jev is served by TypeSafe and by three gateways that resell it. All four take the same questions
@@ -153,9 +196,14 @@ and return the same answers, so the choice is about whose account and billing yo
 | Provider | Key variable | Default model | Get a key |
 | --- | --- | --- | --- |
 | TypeSafe (official) | `TYPESAFE_API_KEY` | `jev-latest` | [typesafe.ai](https://typesafe.ai) |
-| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
+| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.14` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` | [Vercel dashboard](https://vercel.com/dashboard/ai-gateway/api-keys) |
 | OpenCode | `OPENCODE_API_KEY` | `jev-1.13-free` | [OpenCode Zen](https://opencode.ai/auth) |
+
+TypeSafe's `jev-latest` still answers as Jev 1.13 (checked 2026-10-18). TypeSafe has said it will
+move the alias to Jev 1.14 about a week after the 2026-10-14 release; until then
+`JEV_MODEL=jev-1.14.0` picks 1.14. OpenCode lists only Jev 1.13 so far, and Vercel names no
+version in its id.
 
 OpenCode serves two ids at the same endpoint: `jev-1.13-free` (free,
 [for a limited time](https://opencode.ai/docs/zen/#jev)) and the paid `jev-1.13`. The gateway
@@ -391,6 +439,10 @@ injected through `KILO_CONFIG_CONTENT`. Nothing in `~/.config/kilo` is written, 
 flag (including `-m`) forwards untouched. Kilo speaks `POST /v1/chat/completions` to the gateway,
 with the same function tools OpenCode sends.
 
+Existing `KILO_CONFIG_CONTENT` settings are kept; JSONC comments and trailing commas are accepted.
+Gateway defaults and the `jev-gateway` provider are overlaid without removing other settings or
+providers. If the inherited content is not a JSON object, the launcher reports that it could not keep it.
+
 The gateway forwards to the Kilo Gateway (`https://api.kilo.ai/api/openrouter`), the backend of
 Kilo's own `kilo` provider. That provider cannot be pointed at the gateway itself: it appends
 `/openrouter/` to any base URL, so its requests would miss the routed endpoint. The launcher adds a
@@ -531,8 +583,8 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | `direct` | Jev is confident about the tool and every argument is an enum, boolean, or constant | The gateway builds the tool call itself, streaming included. **No LLM call.** Never with extended thinking on (Claude Code): the next turn would replay a tool call with no thinking block, which the API rejects, so such a request gets `hint` instead |
 | `forced` | Jev is confident about the tool, but some arguments are open-ended | Forwarded with `tool_choice` set to that tool, so the LLM only fills in arguments. `ARGS_MODEL` can send these to a cheaper model |
 | `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
-| `none` | Jev is confident that no tool is needed | Forwarded with `tool_choice: "none"` |
-| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, or the caller already chose | Forwarded byte for byte. `x-jev-gateway-reason` says why |
+| `none` | Jev is confident that no tool is needed and `JEV_ON_NONE=force_none`, the default for every client except Codex. With `passthrough` this mode never occurs | Forwarded with the provider's no-tool setting. With `JEV_ON_NONE=passthrough`, or when the request can only be hinted, the mode is `passthrough` with reason `no_tool_needed` |
+| `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, the caller already chose, Jev says no tool is needed (`no_tool_needed`), or shadow evaluation is on (`shadow`) | Forwarded byte for byte. `x-jev-gateway-reason` says why. Under [shadow evaluation](#evaluate-jev-without-applying-it) the log line also holds Jev's proposal |
 
 Responses requests containing Codex `agent_message` items pass through without consulting Jev,
 with reason `agent_message`. These carry delegated tasks or replies that the router cannot
@@ -546,8 +598,63 @@ Codex's internal reviewer receives the original request and chooses its own tool
 names still route normally. Routing opt-outs and the Responses history and `agent_message` checks
 keep their existing reasons.
 
+Codex defaults to `JEV_ON_NONE=passthrough`. When Jev is confident that no tool is needed, the
+request is forwarded intact with reason `no_tool_needed` and the model chooses its next step. The
+reason: in local logs from 2 to 10 October 2026 the model called a tool in 36 of the 52 confident
+`no_tool_needed` predictions that could be tied to a conversation, a call the veto would have
+stopped. That is a small sample from one person's use. Every other client keeps `force_none`.
+
+An explicit `JEV_ON_NONE` always wins, so `JEV_ON_NONE=force_none` brings the veto back for Codex.
+That includes a `.env` copied from an earlier `.env.example`, which already holds
+`JEV_ON_NONE=force_none`: delete that line to get the new default. Restart the gateway after
+changing it.
+
 Tool lists longer than 120 entries (Claude Code sends about 280) take two Jev calls. The first ranks
 the list in groups. The second decides among the top 3 of each group, using full descriptions.
+
+Routing state retains a contiguous suffix of complete call/result groups. Calls and results are
+associated by outstanding observed IDs; Gemini IDs are retained when supplied. Missing, generated
+or reused IDs fall back to pending calls with the same name in FIFO order. Overlapping parallel-call
+spans stay in their original chronological order, and unmatched results retain standalone groups.
+
+Clipping is recorded as `clipped: true` in Jev's state, not inferred from conversation text.
+Ordinary clipped output still routes. The newest group can be shortened to fit while retaining
+its identities; if even its structure and metadata cannot fit, the request bypasses unchanged.
+The budget covers the complete JSON serialization, including escaping, envelope, and metadata,
+measured in JavaScript UTF-16 code units. Text clipping never splits a surrogate pair. Only Jev's
+request is shortened; the provider request and the caller's input remain intact.
+
+### Images
+
+Jev reads images, so a screenshot the user pastes, or one a tool returns, counts in the decision
+instead of reaching Jev as the word `[image]`. The newest `JEV_MAX_IMAGES` (default 2) go with the
+question. The others stay placeholders. The client's request is not changed.
+
+Only images the conversation carries inline, as base64 in the request body, and that Jev accepts as
+they are go to Jev:
+
+| Image | What Jev gets |
+| --- | --- |
+| PNG or JPEG, 280 to 1568 pixels on each side, up to 16 MiB | The image |
+| Larger or smaller, animated PNG, WebP, GIF, or anything else | The placeholder. The gateway does not resize or convert images |
+| Given by URL | The placeholder. The gateway does not fetch it |
+
+An image costs Jev tokens: about 1,100 for 640×480 and 6,600 for 1568×1568, measured against
+`jev-1.14.0` on 2026-10-18. The gateway keeps fewer turns of the conversation to leave the images
+that room. When even the newest turn would not fit beside them, Jev is asked without images.
+
+TypeSafe calls images experimental and does not yet consider them ready for production: the format,
+the limits and the accuracy may change between releases. The gateway opts in per call with the
+`TypeSafe-Danger-Zone-Images: true` header, sent only when the call carries an image. If the
+provider refuses it (400, 413, 415 or 422), the gateway asks again without the images and routes on
+text, so a provider that does not take images costs one extra Jev call on each request that has one.
+`imagesRefused` in the log line says why. Set `JEV_MAX_IMAGES=0` to skip images entirely.
+
+On 2026-10-18, TypeSafe's API took images through this code with `jev-latest` (Jev 1.13) and
+`jev-1.14.0`. Jev named the color of synthetic test images correctly, and the API refused a
+1600-pixel image and a request without the header, as the table above expects. Whether OpenRouter,
+Vercel and OpenCode pass images on to Jev has not been checked. The dashboard shows how many images
+Jev saw when you hover over the Jev latency.
 
 ## Configuration
 
@@ -562,13 +669,54 @@ list. The ones worth knowing:
 | `JEV_MIN_CONFIDENCE` | `0.7` | Below this confidence, the LLM decides. Lower it to route more, raise it to be more careful |
 | `JEV_ARG_MIN_CERTAINTY` | `0.8` | Every argument must reach this for a `direct` answer |
 | `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM |
+| `JEV_ON_NONE` | `passthrough` for Codex, `force_none` for other clients | What to do when Jev is confident that no tool is needed: `force_none` forbids tools for that turn, `passthrough` leaves the request alone |
 | `JEV_ROUTING` | `on` | Set to `off` to start in baseline mode |
+| `JEV_SHADOW` | `false` | Ask Jev beside each request and log its proposal without applying it; needs a restart. See [Evaluate Jev without applying it](#evaluate-jev-without-applying-it) |
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
+| `JEV_MAX_STATE_CHARS` | `60000` | Serialized routing-state budget; integer at least 64 |
+| `JEV_MAX_MESSAGE_CHARS` | `4000` | Per-text-field routing limit; positive integer |
+| `JEV_MAX_IMAGES` | `2` | Most images Jev sees in one call, newest first. `0` keeps every image a placeholder. See [Images](#images) |
 | `ARGS_MODEL` | unset | A cheaper model for filling arguments in `forced` mode |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |
 
+Settings that are `true` or `false` also read `1`/`0`, `yes`/`no` and `on`/`off`, in any case. Any
+other value stops the gateway at startup and names the setting, instead of being read as `false`.
+
 Each request also logs one JSON line to stdout, or to `~/.jev-gateway/<client>.log` under a launcher.
+Entries include a generated `requestId`, a `gatewayRunId` that stays the same until the gateway
+restarts, a `gatewayBuildId`, and the `sentModel` after rewrites or fallbacks. `gatewayBuildId` is
+a SHA-256 fingerprint of the gateway's runtime files, calculated once at startup. It changes when
+those files change, even if the package version stays the same, and stays fixed for that running
+process. It covers `dist` in a compiled install or `src` in development, including adapters,
+provider definitions and dashboard HTML. It excludes environment files, source maps and external
+dependencies. A restart with identical files keeps the same build ID and gets a new run ID. If
+those files cannot be read at startup, the gateway starts anyway and its entries have no
+`gatewayBuildId`.
+
+Standard log entries contain metadata only, including for `direct` calls: tool arguments stay in
+the client reply. A `direct` entry has no `sentModel` or LLM usage, because it never calls the LLM.
+The dashboard gets none of these identity or reply fields: it is built from request metadata only
+(see [Dashboard](#dashboard)).
+
+Replies from the Responses API add a `response` object to the entry, with `id`, `model`, the
+unique tool names in `tools`, and `ending`. Other wire formats keep their token accounting and get
+no `response`. Tool arguments that resemble Responses events do not change token accounting or
+reply metadata. HTTP 200 alone does not mean the reply finished, so `ending` says how it ended:
+
+| `ending` | Meaning |
+| --- | --- |
+| `response.completed`, `response.incomplete`, `response.failed` | The API sent that terminal event. It stays even if the client hangs up afterwards, as Codex does right after `response.completed` |
+| `error` | The API sent an `error` event after its first `response.*` event. An earlier one is not recorded, because Messages streams send `error` events too |
+| `client_aborted` | No terminal event arrived and the client hung up |
+| `stream_error` | No terminal event arrived and reading the upstream stream failed |
+| `unterminated` | The stream closed cleanly without a terminal event |
+
+`ending` is absent when a reply that is not a stream is still `in_progress`. A reply that is not a
+stream and arrives cut short has no `response` at all: the last three values describe streams only.
+Metadata strings are limited to 256 characters and the tool list to 128 names. `response` holds no
+reply text, tool arguments or credentials, and no entry holds a prompt. Opt-in debug dumps still
+contain request bodies as documented above.
 
 ## Known trade-offs
 
@@ -579,8 +727,9 @@ Each request also logs one JSON line to stdout, or to `~/.jev-gateway/<client>.l
   a tool anyway, it may produce an incomplete reply and the agent will retry. Raise
   `JEV_MIN_CONFIDENCE` if you see this.
 - In `hint` mode the LLM still does its own reasoning, so the gain is accuracy, not cost.
-- Jev reads text only and has a 32k-token window. Images become placeholders and long conversations
-  keep their newest turns. It is most accurate in English.
+- Jev has a 32k-token window. Long conversations keep their newest turns, and images take room
+  from them. Images Jev cannot take stay placeholders (see [Images](#images)). Jev is most accurate
+  in English.
 - The default confidence thresholds are starting points. Use the dashboard and baseline mode to tune
   them for your own work.
 - A gateway started by a launcher has no key of its own, because the one `Authorization` header a
@@ -614,6 +763,11 @@ made Opus 5 and Sonnet 5 clearly worse, and GPT-5.6 Luna got cheaper but less of
 runs solved, against 5 of 5 without routing). Measure on your own work before trusting it: five
 runs per cell is a small sample. The chart, the spread of the individual runs, the raw data, how
 one run was caught copying from another, and how to run it yourself are in that repository.
+
+The Codex rows were measured when every client defaulted to `JEV_ON_NONE=force_none`. `jev-codex`
+now defaults to `passthrough` (see [How it works](#how-it-works)), so they do not measure its
+current default. The benchmark starts its gateway with `JEV_CLIENT=bench`, which still gets
+`force_none` unless `JEV_ON_NONE` is set.
 
 A [separate 20-run OpenCode series](https://github.com/vinilana/jev-gateway-bench/tree/main/results/2026-09-23-opencode-opus-5-cliproxy-comparison)
 used Opus 5 on the same tasks. With routing on, median output tokens fell by 62% and time by 79% on

@@ -129,17 +129,20 @@ export function parseJsonc(text) {
 }
 
 /**
- * OPENCODE_CONFIG_CONTENT is one variable, and the user may already be using it. Theirs is kept
+ * OpenCode and Kilo inline config each use one variable that the user may already set. Theirs is kept
  * and the gateway's is laid over it: the default models and the `jev-gateway` provider are the
  * launcher's to set, everything else (agents, permissions, other providers) stays as they wrote
  * it. Content that is not a JSON object cannot be merged, so it is dropped, and the notices say so.
  */
-export function opencodeConfigContent(origin, inherited) {
-  const ours = opencodeInlineConfig(origin);
+function inlineConfigContent(ours, inherited) {
   const theirs = inherited?.trim() ? parseJsonc(inherited) : undefined;
   if (!isObject(theirs)) return JSON.stringify(ours);
   const provider = { ...(isObject(theirs.provider) ? theirs.provider : {}), ...ours.provider };
   return JSON.stringify({ ...theirs, ...ours, provider });
+}
+
+export function opencodeConfigContent(origin, inherited) {
+  return inlineConfigContent(opencodeInlineConfig(origin), inherited);
 }
 
 const providerOf = (model) => (typeof model === "string" && model.includes("/") ? model.slice(0, model.indexOf("/")) : undefined);
@@ -311,7 +314,15 @@ export const kilo = {
     "JEV_KILO_UPSTREAM_BASE_URL   where Kilo traffic goes (default https://api.kilo.ai/api/openrouter)\n" +
     "JEV_KILO_MODEL               model selected as jev-gateway/<model> (default kilo-auto/free)\n" +
     "KILO_API_KEY                 your Kilo key, forwarded untouched; unset means free models only",
-  env: (origin) => ({ KILO_CONFIG_CONTENT: JSON.stringify(kiloInlineConfig(origin)) }),
+  env: (origin, inherited = process.env) => ({
+    KILO_CONFIG_CONTENT: inlineConfigContent(kiloInlineConfig(origin), inherited.KILO_CONFIG_CONTENT),
+  }),
+  notices: (_origin, _argv, inherited = process.env) => {
+    const content = inherited.KILO_CONFIG_CONTENT;
+    return content?.trim() && !isObject(parseJsonc(content))
+      ? ["KILO_CONFIG_CONTENT in your environment is not a JSON object, so this session gets only the gateway's settings from it."]
+      : [];
+  },
   configHelp: (origin) => {
     const config = kiloInlineConfig(origin);
     const manual = JSON.stringify({ model: config.model, small_model: config.small_model, provider: config.provider }, null, 2);
@@ -340,4 +351,3 @@ export const gemini = {
     `#   GEMINI_API_BASE=${origin}\n` +
     `#   or endpoint: ${origin}/v1beta\n`,
 };
-

@@ -81,7 +81,7 @@ src/decide.ts         the mode decision
 src/jev.ts            the call to Jev, for TypeSafe, OpenRouter, Vercel or OpenCode
 src/providers.json    the provider table, shared by jev.ts and the launchers' setup
 src/upstream.ts       streaming reverse proxy
-src/usage.ts          token usage read from a reply, normalised across providers
+src/usage.ts          token usage and safe metadata read from a reply, normalised across providers
 src/events.ts         recent request metadata kept in memory and restored from the log
 src/dashboard.ts      serves /dashboard (dashboard.html is the whole page, no build step)
 src/config.ts         every environment variable, with its default
@@ -110,9 +110,9 @@ otherwise.
   The credentials it forwards to a provider are never written anywhere, and prompts only to
   debug dumps, which are opt-in and redact anything that looks like a secret. The one secret the
   project stores is the user's own key for Jev, saved by the setup they run, in a file only they
-  can read. The dashboard shows request metadata only: a log
-  line for a `direct` decision holds the tool's arguments, so `events.ts` builds each dashboard
-  row field by field instead of passing log entries to the browser.
+  can read. Standard logs contain metadata only, including for `direct` decisions: tool arguments
+  stay in the client reply. `events.ts` also builds each dashboard row field by field, so older
+  log entries or new logging fields cannot expose request content to the browser.
 - **The client's own configuration is never written.** Launchers point a client at the gateway
   through arguments and environment variables for that one process. Nothing in `~/.codex`,
   `~/.claude`, `~/.config/opencode` or `~/.config/kilo` is modified.
@@ -224,8 +224,9 @@ that read `.agents/skills/` (Codex, OpenCode, Gemini CLI) load it on their own, 
 Open an [issue](https://github.com/vinilana/jev-gateway/issues) with the launcher or endpoint you
 used, the gateway version (`npm ls -g jev-gateway`), and the relevant lines of
 `~/.jev-gateway/<client>.log`. The `mode` and `reason` fields of those lines usually say what
-happened. Read log lines and debug dumps before attaching them: a `direct` decision logs the
-tool's arguments, and a dump holds the whole conversation.
+happened. Include `gatewayBuildId` from a current log line to identify the running code, even if
+the package version has not changed. Read log lines and debug dumps before attaching them: older
+logs may contain direct-call arguments, and an opt-in dump holds the whole conversation.
 
 If the problem exposes credentials or conversations, do not open a public issue: report it
 privately through the repository's **Security** tab on GitHub.

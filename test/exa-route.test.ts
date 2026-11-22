@@ -5,7 +5,7 @@ import { createApp } from "../src/app.js";
 import { argKey } from "../src/questions.js";
 import { frame, peel } from "../src/proto/connect.js";
 import { concat, field, readFields, text, utf8 } from "../src/proto/wire.js";
-import { fakeJev, testConfig } from "./helpers.js";
+import { fakeJev, settled, testConfig } from "./helpers.js";
 
 const PATH = "/exa.api_server_pb.ApiServerService/GetChatMessage";
 const userMsg = (body: string) => field(3, 2, concat(utf8(1, randomUUID()), field(2, 0, 1n), utf8(3, body)));
@@ -56,6 +56,22 @@ describe("the exa route", () => {
     const messages = readFields(peel(sent)[0]!.payload).filter((f) => f.field === 3);
     expect(messages).toHaveLength(2);
     expect(text(readFields(messages[1]!.bytes!).find((f) => f.field === 3))).toContain('"exec"');
+  });
+
+  it("forwards the original frame under shadow evaluation and logs what Jev would have hinted", async () => {
+    const jev = fakeJev({ needs_tool: { noul: 0.9 }, tool: { choice: "exec", confidence: 0.9 } });
+    const upstream = rawUpstream(reply);
+    const logged: Record<string, unknown>[] = [];
+    const shadowed = createApp({
+      config: testConfig({ upstreamBaseUrl: "https://server.codeium.com", shadow: true }), askJev: jev.askJev, fetch: upstream.fetchImpl, log: (entry) => logged.push(entry),
+    });
+    const body = exaRequest(userMsg("run echo hi"), toolDef("exec", '{"type":"object","properties":{"command":{"type":"string"}}}'));
+    const res = await post(shadowed, PATH, body);
+    expect(res.headers.get("x-jev-gateway-reason")).toBe("shadow");
+    await res.arrayBuffer();
+    await settled();
+    expect(upstream.calls[0]?.body).toEqual(body);
+    expect(logged[0]).toMatchObject({ mode: "passthrough", reason: "shadow", shadowMode: true, tools: 1, shadow: { mode: "hint", tool: "exec" } });
   });
 
   it("answers a fully resolved call itself, as a Connect stream", async () => {
