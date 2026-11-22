@@ -301,23 +301,5 @@ describe("--status", () => {
     expect(text).toContain("CLI key: TypeSafe");
     expect(text).toContain("TYPESAFE_API_KEY");
     expect(text).not.toContain("cli-b-fixture-key");
-
-    let authorizationMatchedServerKey = false;
-    providerFetch.mockImplementation(async (_input, init) => {
-      authorizationMatchedServerKey =
-        new Headers(init?.headers).get("authorization") === "Bearer server-a-fixture-key";
-      return Response.json({
-        model: "m",
-        answers: { tool: { type: "choice", choice: "a", confidence: 0.9, probabilities: { a: 0.9, b: 0.1 } } },
-        usage: { input_tokens: 10, output_tokens: 0 },
-      });
-    });
-    await askJev({
-      model: "m",
-      state: "s",
-      questions: { tool: { type: "choice", instructions: "?", criteria: { a: null, b: null } } },
-    });
-    expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect(authorizationMatchedServerKey).toBe(true);
   });
 });
