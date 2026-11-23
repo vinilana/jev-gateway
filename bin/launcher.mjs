@@ -1,6 +1,8 @@
 // Shared by the jev-<client> launchers: keep one background router per client alive, then run
 // the client pointed at it. Nothing in the client's own config directory is ever modified.
 import { spawn } from "node:child_process";
+import readCmdShim from "read-cmd-shim";
+import which from "which";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -290,7 +292,29 @@ Environment (or ${ENV_FILES.at(-1)}):
   // the terminal; `--status` shows the same lines at any time.
   const [, warnings] = await Promise.all([ensureRouter(), notices(process.argv.slice(2))]);
   for (const line of warnings) console.error(line);
-  const child = spawn(spec.client, [...(spec.args?.(origin) ?? []), ...process.argv.slice(2)], {
+  let command = spec.client;
+  let args = [...(spec.args?.(origin) ?? []), ...process.argv.slice(2)];
+  if (process.platform === "win32") {
+    try {
+      command = await which(command);
+      if (/\.(cmd|bat)$/i.test(command)) {
+        const target = resolve(dirname(command), await readCmdShim(command.replace(/\.cmd$/i, ".cmd")));
+        if (/\.(exe|com)$/i.test(target)) {
+          command = target;
+        } else {
+          const shebang = readFileSync(target, "utf8").split(/\r?\n/, 1)[0];
+          if (!/^#!(?:\/usr\/bin\/env[ \t]+|[^ \t\r\n]*[\/\\])node(?:\.exe)?[ \t]*$/.test(shebang ?? "")) throw new Error("Not a Node.js shim");
+          // A shell would reinterpret prompts, JSON and newlines passed through the npm shim.
+          command = process.execPath;
+          args = [target, ...args];
+        }
+      }
+    } catch {
+      console.error(`${spec.name}: could not resolve ${spec.client} as an executable or npm Node.js shim.`);
+      process.exit(127);
+    }
+  }
+  const child = spawn(command, args, {
     stdio: "inherit",
     env: { ...process.env, ...spec.env?.(origin) },
   });
